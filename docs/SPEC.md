@@ -183,12 +183,13 @@ ready_tasks(chapter):
 
 ## 4. Phân tích AI
 
-### 4.1 Ba lượt (không gom một prompt khổng lồ)
-| Lượt | Input | Output (JSON) | Lưu |
-|---|---|---|---|
-| `read` | Ảnh frame theo lô 6–8 + tóm tắt lô trước | `FrameReading[]` + `running_summary` | `analysis/read_*.json` |
-| `plan` | Toàn bộ readings (chỉ chữ) + bible hiện có | nhân vật/chiêu mới, `scenes`, `chains` | `analysis/plan.json` |
-| `shots` | Từng scene: readings + ảnh frame của scene + bible | `ShotDraft[]` | `analysis/shots_SCxx.json` |
+### 4.1 Các lượt (không gom một prompt khổng lồ)
+| Lượt | Input | Output (JSON) | Lưu | Cổng duyệt |
+|---|---|---|---|---|
+| `read` | Ảnh khung theo lô 6 + **1 khung trước & 1 khung sau làm ngữ cảnh** + tóm tắt lô trước + danh sách nhân vật/thuật ngữ đã có | `FrameReading[]` (loại khung, câu thoại thô, người nói) + `running_summary` | `analysis/read_*.json` | |
+| `dialogue` | **Toàn bộ thoại của chapter** (chỉ chữ, đúng thứ tự đọc) + hồ sơ nhân vật + **thư viện thuật ngữ** + **bảng xưng hô** | câu đã biên tập + đề xuất thuật ngữ/xưng hô mới | `analysis/dialogue.json` | **Duyệt kịch bản thoại** |
+| `plan` | Readings + thoại đã duyệt + bible | nhân vật/chiêu mới, `scenes`, `chains` | `analysis/plan.json` | |
+| `shots` | Từng scene: readings + ảnh khung + bible + thoại đã duyệt | `ShotDraft[]` | `analysis/shots_SCxx.json` | **Duyệt kế hoạch** |
 
 - Prompt đặt trong `backend/app/providers/prompts/*.md` (có version trong tên file, vd `read.v1.md`).
 - Mỗi lượt: validate bằng Pydantic → lỗi thì gửi lại thông báo lỗi cho model (tối đa 3 lần) → vẫn lỗi thì `AnalysisRun.status=failed`, **giữ raw output** để người dùng xem/sửa.
@@ -205,6 +206,50 @@ Port từ prototype `docs/reference/prototype/rules.py`:
 4. `continuous` chỉ hợp lệ khi cùng chain và cùng scene với shot trước; vi phạm → đổi thành `cut` + ghi chú.
 5. Thời lượng shot ≥ thời gian đọc thoại (~14 ký tự/giây) — vượt `settings.muse_clip_seconds` thì cảnh báo "nên tách shot".
 6. Ghi mọi chỉnh sửa vào `analysis/rule_notes.json` để hiển thị trên UI.
+
+### 4.5 Kịch bản thoại & thư viện thuật ngữ (Phase 2a)
+
+**Loại khung** (`Frame.frame_type`, AI đề xuất ở lượt `read`, người dùng sửa được):
+
+| `frame_type` | Ví dụ | Đi tiếp |
+|---|---|---|
+| `scene` | có hình nhân vật/bối cảnh | thành shot (Phase 2b) |
+| `dialogue_only` | chỉ bong bóng thoại trên nền trống | **không thành shot**; thoại gắn vào khung `scene` kề bên |
+| `caption` | khung dẫn truyện, "3 ngày sau…" | chữ trên màn hình / giọng kể; gắn vào khung kề bên |
+| `sfx_only` | chỉ chữ tượng thanh | gắn vào khung kề bên dưới dạng hiệu ứng |
+| `credit` | banner nhóm dịch, quảng cáo | **đề xuất bỏ** (người dùng duyệt) |
+
+**Bóc thoại (lượt `read`)** — mỗi câu: nội dung **chép nguyên văn** (`text_raw`), loại, người nói (`speaker_key` nếu là nhân vật đã biết; nhân vật phụ chưa tên → `speaker_label` kiểu "lính gác" + `speaker_gender`, `speaker_age`), **độ tin cậy** người nói (0–1), thứ tự đọc trong khung, và **gắn vào khung nào** (`belongs_to`: `self` | `prev` | `next` → quy ra `anchor_frame_id` là một khung `scene`). AI luôn được xem khung trước/sau để quyết định `prev/next`.
+
+**Biên tập thoại (lượt `dialogue`)** — AI đọc **toàn bộ thoại cả chapter một lượt** rồi viết lại `text`:
+- Sửa lỗi dịch máy, câu cứng, sai ngữ pháp; giữ **đúng nghĩa và tình tiết**, không thêm thông tin mới.
+- Dùng **đúng thuật ngữ chuẩn** trong thư viện (tên người, địa danh, chiêu thức, cảnh giới, tông môn, vật phẩm, danh xưng).
+- Dùng **đúng xưng hô** theo cặp nhân vật (vd. đệ tử ↔ sư phụ: "đệ tử" / "sư phụ"; kẻ thù: "ta" / "ngươi"), nhất quán suốt chapter.
+- Văn phong hợp thể loại (tu tiên/võ hiệp: cổ phong vừa phải, không lạm dụng Hán Việt khó hiểu).
+- Độ dài lệch không quá ±40% so với bản gốc (để phụ đề kịp đọc); câu đổi nghĩa đáng kể phải kèm `edit_note`.
+- Trả thêm: `glossary_candidates` (từ đặc biệt mới + các biến thể sai gặp được) và `address_candidates` (xưng hô mới phát hiện).
+
+**Luật code sau lượt `dialogue`** (không tin AI):
+1. Thay mọi **biến thể đã biết** → thuật ngữ chuẩn (đã duyệt) trong `text` (không phân biệt hoa/thường, theo ranh giới từ).
+2. Mọi câu thô phải có đúng 1 câu đã biên tập tương ứng (theo `line_id`), không mất câu, không thêm câu.
+3. Câu lệch độ dài > 40% hoặc có `edit_note` → gắn cờ để người dùng soát.
+4. `technique_name` dùng **đúng tên chuẩn** của chiêu → cũng là chữ hiện trên màn hình (Phase 2b).
+
+**Thư viện thuật ngữ** (project-level, dùng lại mọi chapter): `term` (chuẩn), `kind` (`person | place | technique | realm | sect | item | title | other`), `variants` (cách viết sai đã gặp), `note`, `status` (`suggested | approved | rejected`), `first_seen_chapter_id`. Chỉ thuật ngữ `approved` mới được dùng để thay thế tự động.
+
+**Bảng xưng hô** (project-level): `speaker_key` → `listener_key`: `self_term` (ta, đệ tử, bản tọa…), `address_term` (ngươi, sư phụ, tiền bối…), `status` như trên.
+
+**Chế độ lời thoại** (`Project.settings.dialogue_mode`, đổi được bất kỳ lúc nào, không phải làm lại phân tích/video):
+
+| Giá trị | Người xem nhận được |
+|---|---|
+| `subtitles` (**mặc định, chapter đầu**) | phụ đề + hiệu ứng âm thanh + nhạc nền |
+| `voice` | mỗi nhân vật 1 giọng TTS theo giới tính/tuổi + phụ đề tùy chọn |
+| `narration` | 1 giọng kể chuyện + phụ đề |
+
+Thời lượng hiển thị câu (chế độ `subtitles`): `max(1.2s, ký tự / 14)`; shot tự kéo dài cho đủ.
+
+**Hội thoại dài**: khi thoại gắn vào 1 khung `scene` vượt `settings.muse_clip_seconds` × 1.5, lượt `shots` (Phase 2b) **đề xuất chèn shot phản ứng** (cận mặt người nghe / chuyển qua lại giữa người nói), đánh dấu `inserted: true` + cần duyệt; không đề xuất được thì giữ khung lâu hơn.
 
 ### 4.4 Đặc thù Muse (chỉ ảnh đầu)
 `video_prompt` phải mô tả rõ **trạng thái kết thúc** (`end_state`) — vì không ép được khung cuối, đây là cách duy nhất để shot sau dự đoán được. Khuyến nghị clip ngắn (3–5s) để giảm trôi mặt.
@@ -232,6 +277,33 @@ Mọi schema là Pydantic model trong `backend/app/schemas/`, xuất JSON Schema
 ```
 `texts[].kind` ∈ `dialogue | inner_thought | narration | technique_name | sfx | system`. `intensity` 1–5.
 
+Bổ sung (Phase 2a): `frame_type` (§4.5); mỗi phần tử `texts[]` thêm `line_no` (thứ tự đọc trong khung), `speaker_key | null`, `speaker_label | null`, `speaker_gender` (`male | female | unknown`), `speaker_age` (`child | teen | young_adult | middle_aged | elderly | unknown`), `speaker_confidence` (0–1), `belongs_to` (`self | prev | next`).
+
+### 5.1b `DialogueLine` (bảng `dialogue_lines`)
+```json
+{
+  "id": "DL00123", "chapter_id": "CH01", "order": 57,
+  "source_frame_id": "F040", "anchor_frame_id": "F039",
+  "kind": "dialogue",
+  "speaker_key": "lam_phong", "speaker_label": null,
+  "speaker_gender": "male", "speaker_age": "young_adult", "speaker_confidence": 0.62,
+  "text_raw": "Khế nguyên linh thạch nhà ta không phải là nên hoàn chỉnh sao? Sao lại vỡ thành như này?",
+  "text": "Khối Nguyên Linh Thạch nhà ta vốn nguyên vẹn cơ mà? Sao lại vỡ thành thế này?",
+  "edited_by": "ai", "edit_note": null, "needs_review": true,
+  "shot_code": null, "at_s": null, "dur_s": null
+}
+```
+`edited_by` ∈ `none | ai | user`. Người dùng sửa tay → `user`, AI chạy lại **không ghi đè** câu `user`.
+
+### 5.1c `GlossaryTerm` / `AddressRule` (project-level)
+```json
+{"id": "GT0007", "project_id": "PJ01", "term": "Nguyên Linh Thạch", "kind": "item",
+ "variants": ["nguyên linh thạch", "Khế nguyên linh thạch"], "note": "đá linh khí dùng tu luyện",
+ "status": "approved", "first_seen_chapter_id": "CH01"}
+{"id": "AR0003", "project_id": "PJ01", "speaker_key": "lam_phong", "listener_key": "su_phu",
+ "self_term": "đệ tử", "address_term": "sư phụ", "status": "approved"}
+```
+
 ### 5.2 Story Bible (project-level)
 ```json
 {
@@ -239,7 +311,9 @@ Mọi schema là Pydantic model trong `backend/app/schemas/`, xuất JSON Schema
   "style_lock": "2D anime cel-shaded, matching source manhua line art, cinematic lighting",
   "negative": "no text, no speech bubbles, no watermark",
   "characters": [
-    {"key": "hero", "name": "Hero", "look_lock": "young man, long dark brown hair loosely tied, white inner robe, dark outer robe",
+    {"key": "hero", "name": "Hero", "gender": "male", "age_group": "young_adult",
+     "voice_style": "điềm tĩnh, lạnh", "aliases": ["Lâm Phong", "tiểu tử họ Lâm"],
+     "look_lock": "young man, long dark brown hair loosely tied, white inner robe, dark outer robe",
      "voice_id": "vi-male-1", "ref_asset_ids": ["A0042"]}
   ],
   "techniques": [
@@ -532,7 +606,8 @@ Mã HTTP: 400 dữ liệu sai, 404 không tồn tại, 409 xung đột trạng t
 |---|---|---|
 | **0** | Khung repo, backend/frontend chạy, DB + migration, job runner + SSE, CI | xem `docs/tasks/phase-0.md` |
 | **1** | Project/chapter, nhập URL + thư mục, ghép & cắt khung, UI chỉnh khung | xem `docs/tasks/phase-1.md` |
-| **2** | Provider adapter (Gemini + thủ công + giả), 3 lượt phân tích, luật, màn Kịch bản & Bảng shot | viết sau review Phase 1 |
+| **2a** | Provider adapter (Gemini + thủ công + giả), lượt `read` (loại khung, bóc thoại, người nói), lượt `dialogue` (biên tập + thuật ngữ + xưng hô), màn **Kịch bản thoại** & **Thuật ngữ** | xem `docs/tasks/phase-2a.md` |
+| **2b** | Lượt `plan` + `shots`, luật §4.3, shot phản ứng, màn Bảng shot | viết sau review 2a |
 | **3** | HandoffTask, Hàng chờ, take, duyệt, khung nối, lập lịch chuỗi, stale | viết sau review Phase 2 |
 | **4** | Nhân vật (ảnh chuẩn, giọng), TTS, xuất gói CapCut, **dựng tự động HyperFrames** (bắt đầu bằng spike Windows) | |
 | **5** | Thư mục theo dõi, AI gom khung, sao lưu, đánh bóng UI | |
@@ -545,5 +620,5 @@ File nhiệm vụ của phase sau chỉ được viết **sau khi** phase trư�
 1. Muse: độ dài clip/tỷ lệ khung cho phép? Có giới hạn số lần tạo/ngày? (ảnh hưởng `muse_clip_seconds`, gợi ý số tab)
 2. TTS: Gemini TTS (cùng API key) hay edge-tts? Cần nghe thử giọng Việt trước Phase 4.
 3. Web truyện chính dùng để nhập: cần 1–2 URL mẫu để viết `SiteProfile` (Phase 1).
-4. Khung hình xuất: 16:9 (YouTube) hay 9:16 (TikTok)? Ảnh hưởng prompt keyframe (Phase 2).
+4. Khung hình xuất: 16:9 (YouTube) hay 9:16 (TikTok)? Ảnh hưởng prompt keyframe (Phase 2b).
 5. HyperFrames có render ổn trên Windows 11 không? (spike đầu Phase 4)
