@@ -6,6 +6,7 @@ from fastapi import APIRouter, File, Response, UploadFile
 from pydantic import BaseModel, Field
 
 from app.errors import AppError
+from app.frames.images import MAX_IMAGE_BYTES
 from app.services import bible as svc
 
 router = APIRouter(tags=["bible"])
@@ -115,11 +116,18 @@ def download_sheet_bundle(target: str, id: str) -> Response:
 
 
 @router.post("/{target}/{id}/sheet")
-async def upload_sheet(target: str, id: str, file: UploadFile = File(...)) -> dict[str, Any]:
+def upload_sheet(target: str, id: str, file: UploadFile = File(...)) -> dict[str, Any]:
     if target not in ("outfits", "locations"):
         raise AppError("INVALID_TARGET", f"Mục tiêu '{target}' không hợp lệ", status_code=400)
-    content = await file.read()
-    return svc.upload_sheet(target, id, content, file.filename or "sheet.png")  # type: ignore[arg-type]
+    content = file.file.read(MAX_IMAGE_BYTES + 1)
+    if len(content) > MAX_IMAGE_BYTES:
+        max_mb = MAX_IMAGE_BYTES // (1024 * 1024)
+        raise AppError(
+            "FILE_TOO_LARGE",
+            f"Ảnh quá lớn (tối đa {max_mb} MB)",
+            status_code=413,
+        )
+    return svc.upload_sheet(target, id, content)  # type: ignore[arg-type]
 
 
 @router.post("/{target}/{id}/sheet/approve")

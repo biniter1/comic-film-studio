@@ -9,6 +9,7 @@ import re
 import zipfile
 from datetime import datetime, timezone
 from typing import Any, Literal
+from uuid import uuid4
 
 from sqlmodel import Session, select
 
@@ -506,12 +507,22 @@ def get_sheet_bundle(target: TargetType, item_id: str) -> tuple[bytes, str]:
         return buf.getvalue(), zip_filename
 
 
-def upload_sheet(
-    target: TargetType, item_id: str, file_bytes: bytes, filename: str
-) -> dict[str, Any]:
+def _sheet_assets(s: Session, pid: str, kind: str, rel_base: str) -> list[Asset]:
+    """Find all assets belonging strictly to this sheet directory: <rel_base>/..."""
+    prefix = rel_base.rstrip("/") + "/"
+    all_kind = s.exec(
+        select(Asset).where(
+            Asset.project_id == pid,
+            Asset.kind == kind,
+        )
+    ).all()
+    return [a for a in all_kind if a.path.startswith(prefix)]
+
+
+def upload_sheet(target: TargetType, item_id: str, file_bytes: bytes) -> dict[str, Any]:
     # Write temp file and check image
     t_dir = tmp_dir()
-    temp_path = t_dir / f"upload_sheet_{_now().timestamp()}_{filename}"
+    temp_path = t_dir / f"upload_sheet_{uuid4().hex}.img"
     try:
         temp_path.write_bytes(file_bytes)
         check = check_image(temp_path, min_width=100)
@@ -552,15 +563,9 @@ def upload_sheet(
 
             # Determine next version
             versions = [1]
-            existing_assets = s.exec(
-                select(Asset).where(
-                    Asset.project_id == pid,
-                    Asset.kind == kind,
-                )
-            ).all()
+            existing_assets = _sheet_assets(s, pid, kind, rel_base)
             for a in existing_assets:
-                if a.path.startswith(rel_base):
-                    versions.append(a.version + 1)
+                versions.append(a.version + 1)
             for p in target_folder.glob("sheet_v*.png"):
                 m = re.search(r"sheet_v(\d+)\.png$", p.name)
                 if m:
@@ -668,15 +673,10 @@ def reject_sheet(target: TargetType, item_id: str) -> dict[str, Any]:
                 s.add(asset)
 
         # Check if an earlier approved asset exists for this item
-        candidates = s.exec(
-            select(Asset).where(
-                Asset.project_id == pid,
-                Asset.kind == kind,
-                Asset.approval == "approved",
-            )
-        ).all()
         matching = [
-            a for a in candidates if a.path.startswith(rel_base) and a.id != item.sheet_asset_id
+            a
+            for a in _sheet_assets(s, pid, kind, rel_base)
+            if a.approval == "approved" and a.id != item.sheet_asset_id
         ]
         if matching:
             latest = max(matching, key=lambda a: a.version)

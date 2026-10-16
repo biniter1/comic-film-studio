@@ -399,3 +399,161 @@ def test_get_project_bible(client: TestClient):
     assert len(bible["characters"][0]["outfits"]) == 1
     assert len(bible["locations"]) == 1
     assert bible["locations"][0]["name_vi"] == "Huyền Thiên Tông"
+
+
+def test_outfit_sheet_independent_version_and_rejection(client: TestClient):
+    p = client.post("/api/projects", json={"name": "Dự án Outfits Substring"}).json()
+    pid = p["id"]
+    char = client.post(
+        f"/api/projects/{pid}/characters",
+        json={"name": "Lâm Phong", "gender": "male"},
+    ).json()
+    chid = char["id"]
+
+    outfits = client.get(f"/api/characters/{chid}/outfits").json()
+    o_default = outfits[0]
+    assert o_default["key"] == "default"
+
+    # Add second outfit with key "default_2"
+    o2_res = client.post(
+        f"/api/characters/{chid}/outfits",
+        json={"name_vi": "Default Two", "key": "default_2"},
+    )
+    assert o2_res.status_code == 201
+    o_default_2 = o2_res.json()
+    assert o_default_2["key"] == "default_2"
+
+    # Upload and approve sheet for default_2 first
+    png2 = _png(400, 300, (10, 20, 30))
+    up2 = client.post(
+        f"/api/outfits/{o_default_2['id']}/sheet",
+        files={"file": ("sheet.png", png2, "image/png")},
+    )
+    assert up2.status_code == 200
+    res2 = up2.json()
+    assert res2["sheet_status"] == "pending"
+    app2 = client.post(f"/api/outfits/{o_default_2['id']}/sheet/approve")
+    assert app2.status_code == 200
+    assert app2.json()["sheet_status"] == "approved"
+    sheet2_asset_id = app2.json()["sheet_asset_id"]
+
+    # Upload sheet for default -> should be sheet_v1 (independent of default_2)
+    png1 = _png(400, 300, (40, 50, 60))
+    up1 = client.post(
+        f"/api/outfits/{o_default['id']}/sheet",
+        files={"file": ("sheet.png", png1, "image/png")},
+    )
+    assert up1.status_code == 200
+    res1 = up1.json()
+    sheet1_asset_id = res1["sheet_asset_id"]
+
+    from sqlmodel import Session
+
+    with Session(db.engine) as s:
+        a1 = s.get(Asset, sheet1_asset_id)
+        assert a1 is not None
+        assert a1.version == 1
+        assert a1.path.endswith("refs/lam_phong/default/sheet_v1.png")
+        a2 = s.get(Asset, sheet2_asset_id)
+        assert a2 is not None
+        assert a2.version == 1
+        assert a2.path.endswith("refs/lam_phong/default_2/sheet_v1.png")
+
+    # Reject sheet of default (which has no previous approved sheet)
+    # -> MUST NOT point to default_2's sheet
+    rej = client.post(f"/api/outfits/{o_default['id']}/sheet/reject")
+    assert rej.status_code == 200
+    rej_data = rej.json()
+    assert rej_data["sheet_status"] == "missing"
+    assert rej_data["sheet_asset_id"] != sheet2_asset_id
+
+
+def test_merge_characters_preserves_outfits_and_sheets(client: TestClient):
+    p = client.post("/api/projects", json={"name": "Dự án Merge Outfits"}).json()
+    pid = p["id"]
+
+    # Char 1: Lam Phong (destination)
+    c1 = client.post(
+        f"/api/projects/{pid}/characters",
+        json={"name": "Lâm Phong", "gender": "male"},
+    ).json()
+    c1_outfits = client.get(f"/api/characters/{c1['id']}/outfits").json()
+    c1_def = c1_outfits[0]
+
+    # Char 2: Phong Nhi (source)
+    c2 = client.post(
+        f"/api/projects/{pid}/characters",
+        json={"name": "Phong Nhi", "gender": "male"},
+    ).json()
+    c2_outfits = client.get(f"/api/characters/{c2['id']}/outfits").json()
+    c2_def = c2_outfits[0]
+
+    # Upload and approve sheet for c1 default
+    up1 = client.post(
+        f"/api/outfits/{c1_def['id']}/sheet",
+        files={"file": ("sheet1.png", _png(400, 300, (10, 10, 10)), "image/png")},
+    )
+    assert up1.status_code == 200
+    app1 = client.post(f"/api/outfits/{c1_def['id']}/sheet/approve").json()
+    c1_sheet_id = app1["sheet_asset_id"]
+    assert c1_sheet_id is not None
+
+    # Upload and approve sheet for c2 default
+    up2 = client.post(
+        f"/api/outfits/{c2_def['id']}/sheet",
+        files={"file": ("sheet2.png", _png(400, 300, (20, 20, 20)), "image/png")},
+    )
+    assert up2.status_code == 200
+    app2 = client.post(f"/api/outfits/{c2_def['id']}/sheet/approve").json()
+    c2_sheet_id = app2["sheet_asset_id"]
+    assert c2_sheet_id is not None
+
+    # Merge c2 into c1
+    m_res = client.post(
+        f"/api/characters/{c2['id']}/merge",
+        json={"into_id": c1["id"]},
+    )
+    assert m_res.status_code == 200
+
+    # Query destination outfits
+    outfits = client.get(f"/api/characters/{c1['id']}/outfits").json()
+    assert len(outfits) == 2
+
+    # Exactly 1 default outfit
+    defaults = [o for o in outfits if o["is_default"]]
+    assert len(defaults) == 1
+    assert defaults[0]["key"] == "default"
+    assert defaults[0]["sheet_asset_id"] == c1_sheet_id
+
+    # The other outfit was renamed with prefix f"{src.key}_{o.key}"
+    non_defaults = [o for o in outfits if not o["is_default"]]
+    assert len(non_defaults) == 1
+    merged_o = non_defaults[0]
+    assert merged_o["key"] == f"{c2['key']}_default"
+    assert merged_o["sheet_asset_id"] == c2_sheet_id
+    assert merged_o["sheet_status"] == "approved"
+
+
+def test_upload_sheet_file_too_large_413(client: TestClient, monkeypatch):
+    import app.api.bible
+
+    # Monkeypatch MAX_IMAGE_BYTES in api module to a small size for fast testing (e.g. 100 bytes)
+    monkeypatch.setattr(app.api.bible, "MAX_IMAGE_BYTES", 100)
+
+    p = client.post("/api/projects", json={"name": "Dự án 413"}).json()
+    pid = p["id"]
+    char = client.post(
+        f"/api/projects/{pid}/characters",
+        json={"name": "Lâm Phong", "gender": "male"},
+    ).json()
+    outfits = client.get(f"/api/characters/{char['id']}/outfits").json()
+    oid = outfits[0]["id"]
+
+    # Send 200 bytes > 100 bytes
+    res = client.post(
+        f"/api/outfits/{oid}/sheet",
+        files={"file": ("huge.png", b"x" * 200, "image/png")},
+    )
+    assert res.status_code == 413
+    assert res.json()["error"]["code"] == "FILE_TOO_LARGE"
+    assert "Ảnh quá lớn" in res.json()["error"]["message_vi"]

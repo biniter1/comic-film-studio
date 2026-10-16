@@ -602,22 +602,44 @@ def merge_character(chid: str, into_id: str) -> dict[str, Any]:
             dst.age_group = src.age_group
         s.add(dst)
 
-        # Reassign or delete outfits belonging to src
+        # Move outfits of src to dst (avoid duplicate keys, preserve sheets, only 1 default)
         src_outfits = s.exec(
             select(CharacterOutfit).where(CharacterOutfit.character_id == src.id)
         ).all()
-        dst_outfit_keys = {
-            o.key
-            for o in s.exec(
-                select(CharacterOutfit).where(CharacterOutfit.character_id == dst.id)
-            ).all()
-        }
+        dst_outfits = s.exec(
+            select(CharacterOutfit).where(CharacterOutfit.character_id == dst.id)
+        ).all()
+        taken_keys = {o.key for o in dst_outfits}
+
         for o in src_outfits:
-            if o.key in dst_outfit_keys:
-                s.delete(o)
-            else:
-                o.character_id = dst.id
-                s.add(o)
+            if o.key in taken_keys:
+                base_cand = f"{src.key}_{o.key}"
+                cand = base_cand
+                counter = 2
+                while cand in taken_keys:
+                    cand = f"{base_cand}_{counter}"
+                    counter += 1
+                o.key = cand
+            taken_keys.add(o.key)
+            o.character_id = dst.id
+            o.is_default = False
+            s.add(o)
+
+        # Ensure dst has exactly 1 default outfit
+        has_default = any(o.is_default for o in dst_outfits)
+        if not has_default and (dst_outfits or src_outfits):
+            first_outfit = dst_outfits[0] if dst_outfits else src_outfits[0]
+            first_outfit.is_default = True
+            s.add(first_outfit)
+        elif has_default:
+            first_def = True
+            for o in dst_outfits:
+                if o.is_default:
+                    if first_def:
+                        first_def = False
+                    else:
+                        o.is_default = False
+                        s.add(o)
 
         s.flush()
         s.delete(src)
