@@ -36,13 +36,14 @@ class SecretMaskingFilter(logging.Filter):
         return text
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if isinstance(record.msg, str):
-            record.msg = self.mask_text(record.msg)
-        if record.args:
-            if isinstance(record.args, dict):
-                record.args = {k: self.mask_text(str(v)) for k, v in record.args.items()}
-            elif isinstance(record.args, tuple):
-                record.args = tuple(self.mask_text(str(v)) for v in record.args)
+        # Format first, then mask the final text. Converting args to str before formatting
+        # breaks %-style placeholders such as "%d" (e.g. httpx/uvicorn access logs).
+        try:
+            message = record.getMessage()
+        except Exception:  # malformed record: keep it, but never crash the logger
+            message = str(record.msg)
+        record.msg = self.mask_text(message)
+        record.args = None
         return True
 
 

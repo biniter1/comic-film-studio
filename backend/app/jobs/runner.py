@@ -1,6 +1,8 @@
 import asyncio
+import logging
+import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -11,9 +13,11 @@ from app.config import settings
 from app.db import engine as global_engine
 from app.errors import AppError
 from app.jobs.event_bus import event_bus
-from app.jobs.registry import JobContext, JobError, get_handler
+from app.jobs.registry import JobError, _check_payload, get_handler, is_async_handler
 from app.models.job import Job
 from app.schemas.job import JobRead
+
+logger = logging.getLogger(__name__)
 
 
 class JobService:
@@ -31,17 +35,49 @@ class JobService:
         payload = payload or {}
         depends_on = depends_on or []
 
+        # Reject secret-like payload keys (SPEC §5.6)
+        _check_payload(payload)
+
         with Session(self.engine) as session:
-            # Idempotency check: if input_hash matches a succeeded job of same type, reuse it
+            # Idempotency: reuse an already-succeeded job with the same hash
             if input_hash:
-                statement = select(Job).where(
-                    Job.type == type,
-                    Job.input_hash == input_hash,
-                    Job.status == "succeeded",
-                )
-                existing = session.exec(statement).first()
+                existing = session.exec(
+                    select(Job).where(
+                        Job.type == type,
+                        Job.input_hash == input_hash,
+                        Job.status == "succeeded",
+                    )
+                ).first()
                 if existing:
                     return existing
+
+            # B3: validate depends_on — fail immediately if parent doesn't exist
+            for dep_id in depends_on:
+                dep = session.get(Job, dep_id)
+                if dep is None:
+                    # Create the job directly as failed/permanent
+                    job_id = f"J{uuid.uuid4().hex[:6].upper()}"
+                    job = Job(
+                        id=job_id,
+                        type=type,
+                        status="failed",
+                        depends_on=depends_on,
+                        input_hash=input_hash,
+                        attempts=0,
+                        max_attempts=max_attempts,
+                        progress=0.0,
+                        log_path=f"jobs/{job_id}.log",
+                        payload=payload,
+                        error_category="permanent",
+                        error_message=f"Phụ thuộc vào job không tồn tại: {dep_id}",
+                        created_at=datetime.now(timezone.utc),
+                        finished_at=datetime.now(timezone.utc),
+                    )
+                    session.add(job)
+                    session.commit()
+                    session.refresh(job)
+                    self._emit_event(job)
+                    return job
 
             job_id = f"J{uuid.uuid4().hex[:6].upper()}"
             job = Job(
@@ -61,7 +97,7 @@ class JobService:
             session.commit()
             session.refresh(job)
 
-        self._publish_job_updated(job)
+        self._emit_event(job)
         return job
 
     def get_job(self, job_id: str) -> Optional[Job]:
@@ -95,14 +131,30 @@ class JobService:
             job.error_category = None
             job.error_message = None
             job.user_action_required = None
+            job.next_run_at = None
             job.started_at = None
             job.finished_at = None
             session.add(job)
             session.commit()
             session.refresh(job)
 
-        self._publish_job_updated(job)
+        self._emit_event(job)
+
+        # B3: when a parent job is retried, clear user_action_required on children
+        self._clear_children_notification(job_id)
+
         return job
+
+    def _clear_children_notification(self, parent_id: str) -> None:
+        """When parent job is retried, remove blocking notice from waiting children."""
+        with Session(self.engine) as session:
+            all_queued = session.exec(select(Job).where(Job.status == "queued")).all()
+            for child in all_queued:
+                if parent_id in (child.depends_on or []) and child.user_action_required:
+                    child.user_action_required = None
+                    session.add(child)
+                    self._emit_event(child)
+            session.commit()
 
     def cancel(self, job_id: str, runner: Optional["JobRunner"] = None) -> Job:
         with Session(self.engine) as session:
@@ -113,28 +165,25 @@ class JobService:
             if job.status in ("succeeded", "failed", "cancelled"):
                 return job
 
-            if job.status == "queued":
+            if job.status in ("queued",):
+                # B4: also catches jobs waiting in backoff (status=queued + next_run_at set)
                 job.status = "cancelled"
                 job.finished_at = datetime.now(timezone.utc)
                 session.add(job)
                 session.commit()
                 session.refresh(job)
+                self._emit_event(job)
             elif job.status == "running":
+                # Signal the runner worker to stop; worker will handle status transition
                 if runner:
                     runner.request_cancel(job_id)
-                # Keep running status until worker exits or mark cancel flag
-                return job
 
-        self._publish_job_updated(job)
         return job
 
-    def _publish_job_updated(self, job: Job) -> None:
-        try:
-            loop = asyncio.get_running_loop()
-            data = JobRead.model_validate(job).model_dump(mode="json")
-            loop.create_task(event_bus.publish("job.updated", data))
-        except RuntimeError:
-            pass
+    def _emit_event(self, job: Job) -> None:
+        """Publish job.updated from any thread or async context (thread-safe)."""
+        data = JobRead.model_validate(job).model_dump(mode="json")
+        event_bus.publish_threadsafe("job.updated", data)
 
 
 class JobRunner:
@@ -155,11 +204,12 @@ class JobRunner:
         self._cancel_flags: dict[str, bool] = {}
 
     def recover_running_jobs(self) -> None:
-        """Reset jobs in 'running' status back to 'queued' on startup (preserving attempts)."""
+        """Reset jobs stuck in 'running' state back to 'queued' on startup."""
         with Session(self.engine) as session:
             running_jobs = session.exec(select(Job).where(Job.status == "running")).all()
             for job in running_jobs:
                 job.status = "queued"
+                job.next_run_at = None
                 session.add(job)
             session.commit()
 
@@ -180,7 +230,6 @@ class JobRunner:
                 pass
             self._worker_task = None
 
-        # Wait for active tasks
         for task in list(self._active_tasks.values()):
             task.cancel()
         if self._active_tasks:
@@ -197,12 +246,36 @@ class JobRunner:
         while self._running:
             try:
                 await self._poll_and_spawn()
+                await self._update_blocked_children()
             except Exception:
-                pass
+                # N1: log exceptions from the worker loop instead of silently swallowing
+                logger.exception("Unexpected error in job runner poll loop")
             await asyncio.sleep(0.5)
 
+    async def _update_blocked_children(self) -> None:
+        """B3: For queued children whose parent is failed/cancelled, set user_action_required."""
+        with Session(self.engine) as session:
+            queued_jobs = session.exec(select(Job).where(Job.status == "queued")).all()
+            for child in queued_jobs:
+                if not child.depends_on:
+                    continue
+                blocked_by: list[str] = []
+                for dep_id in child.depends_on:
+                    dep = session.get(Job, dep_id)
+                    if dep and dep.status in ("failed", "cancelled"):
+                        blocked_by.append(dep_id)
+
+                if blocked_by:
+                    msg = f"Chờ job {', '.join(blocked_by)} được sửa hoặc chạy lại"
+                    if child.user_action_required != msg:
+                        child.user_action_required = msg
+                        session.add(child)
+                        session.commit()
+                        session.refresh(child)
+                        self._emit_event(child)
+
     async def _poll_and_spawn(self) -> None:
-        # Clean finished active tasks
+        # Reap finished tasks
         finished_ids = [jid for jid, t in self._active_tasks.items() if t.done()]
         for jid in finished_ids:
             del self._active_tasks[jid]
@@ -211,8 +284,10 @@ class JobRunner:
         if slots <= 0:
             return
 
+        now = datetime.now(timezone.utc)
+
         with Session(self.engine) as session:
-            # Query queued jobs
+            # B4: only pick up jobs whose next_run_at is due (or null)
             queued_jobs = session.exec(
                 select(Job).where(Job.status == "queued").order_by(Job.created_at.asc())
             ).all()
@@ -223,39 +298,40 @@ class JobRunner:
                 if job.id in self._active_tasks:
                     continue
 
+                # B4: respect backoff schedule
+                if job.next_run_at and job.next_run_at > now:
+                    continue
+
                 # Check dependencies
                 deps_met = True
                 if job.depends_on:
                     for dep_id in job.depends_on:
-                        dep_job = session.get(Job, dep_id)
-                        if not dep_job or dep_job.status != "succeeded":
+                        dep = session.get(Job, dep_id)
+                        if not dep or dep.status != "succeeded":
                             deps_met = False
                             break
 
                 if not deps_met:
                     continue
 
-                # Spawn execution
                 task = asyncio.create_task(self._execute_job(job.id))
                 self._active_tasks[job.id] = task
                 slots -= 1
 
     async def _execute_job(self, job_id: str) -> None:
-        # Step 1: Mark job as running
         with Session(self.engine) as session:
             job = session.get(Job, job_id)
-            if not job:
-                return
-            if job.status != "queued":
+            if not job or job.status != "queued":
                 return
 
             job.status = "running"
+            job.next_run_at = None
             job.started_at = datetime.now(timezone.utc)
             session.add(job)
             session.commit()
             session.refresh(job)
 
-        self._emit_job_event(job)
+        self._emit_event(job)
 
         log_path = (
             self.data_dir / job.log_path
@@ -263,7 +339,16 @@ class JobRunner:
             else (self.data_dir / "jobs" / f"{job_id}.log")
         )
 
+        # N4: throttle progress updates — max 4 per second, always flush last
+        _last_progress_time: list[float] = [0.0]
+        _THROTTLE_INTERVAL = 0.25  # 250ms = 4 updates/s max
+
         def progress_callback(prog: float, msg: Optional[str]) -> None:
+            now_mono = time.monotonic()
+            elapsed = now_mono - _last_progress_time[0]
+            if elapsed < _THROTTLE_INTERVAL and prog < 1.0:
+                return
+            _last_progress_time[0] = now_mono
             with Session(self.engine) as s:
                 j = s.get(Job, job_id)
                 if j and j.status == "running":
@@ -271,7 +356,9 @@ class JobRunner:
                     s.add(j)
                     s.commit()
                     s.refresh(j)
-                    self._emit_job_event(j)
+                    self._emit_event(j)
+
+        from app.jobs.registry import JobContext
 
         ctx = JobContext(
             job_id=job.id,
@@ -294,12 +381,16 @@ class JobRunner:
                     session.add(j)
                     session.commit()
                     session.refresh(j)
-                    self._emit_job_event(j)
+                    self._emit_event(j)
             self._cancel_flags.pop(job_id, None)
             return
 
         try:
-            await handler(ctx)
+            # B2: dispatch sync handlers via asyncio.to_thread so they don't block the loop
+            if is_async_handler(handler):
+                await handler(ctx)
+            else:
+                await asyncio.to_thread(handler, ctx)
 
             with Session(self.engine) as session:
                 j = session.get(Job, job_id)
@@ -313,7 +404,7 @@ class JobRunner:
                     session.add(j)
                     session.commit()
                     session.refresh(j)
-                    self._emit_job_event(j)
+                    self._emit_event(j)
 
         except JobError as je:
             ctx.log(f"JobError ({je.category}): {je.message}")
@@ -324,40 +415,40 @@ class JobRunner:
                     j.error_message = je.message
                     j.user_action_required = je.user_action_required
 
-                    if je.category == "transient":
+                    if self.is_cancelled(job_id):
+                        j.status = "cancelled"
+                        j.finished_at = datetime.now(timezone.utc)
+                        session.add(j)
+                        session.commit()
+                        session.refresh(j)
+                        self._emit_event(j)
+                    elif je.category == "transient":
                         j.attempts += 1
                         if j.attempts < j.max_attempts:
                             delay_idx = min(j.attempts - 1, len(self.backoff_delays) - 1)
                             delay = self.backoff_delays[delay_idx]
                             ctx.log(f"Retry lần {j.attempts}/{j.max_attempts} sau {delay}s...")
-                            # Backoff delay then re-queue
+                            # B4: set status=queued + next_run_at instead of holding slot
+                            j.status = "queued"
+                            j.next_run_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
                             session.add(j)
                             session.commit()
                             session.refresh(j)
-                            self._emit_job_event(j)
-
-                            # Handle backoff delay
-                            await asyncio.sleep(delay)
-                            with Session(self.engine) as session_retry:
-                                j_retry = session_retry.get(Job, job_id)
-                                if j_retry and j_retry.status == "running":
-                                    j_retry.status = "queued"
-                                    session_retry.add(j_retry)
-                                    session_retry.commit()
-                                    session_retry.refresh(j_retry)
-                                    self._emit_job_event(j_retry)
-                            return
+                            self._emit_event(j)
                         else:
                             j.status = "failed"
                             j.finished_at = datetime.now(timezone.utc)
+                            session.add(j)
+                            session.commit()
+                            session.refresh(j)
+                            self._emit_event(j)
                     else:
                         j.status = "failed"
                         j.finished_at = datetime.now(timezone.utc)
-
-                    session.add(j)
-                    session.commit()
-                    session.refresh(j)
-                    self._emit_job_event(j)
+                        session.add(j)
+                        session.commit()
+                        session.refresh(j)
+                        self._emit_event(j)
 
         except Exception as e:
             ctx.log(f"Lỗi không mong muốn: {str(e)}")
@@ -371,20 +462,17 @@ class JobRunner:
                     session.add(j)
                     session.commit()
                     session.refresh(j)
-                    self._emit_job_event(j)
+                    self._emit_event(j)
 
         finally:
             self._cancel_flags.pop(job_id, None)
 
-    def _emit_job_event(self, job: Job) -> None:
-        try:
-            loop = asyncio.get_running_loop()
-            data = JobRead.model_validate(job).model_dump(mode="json")
-            loop.create_task(event_bus.publish("job.updated", data))
-        except RuntimeError:
-            pass
+    def _emit_event(self, job: Job) -> None:
+        """Thread-safe event emission (works from both async context and thread workers)."""
+        data = JobRead.model_validate(job).model_dump(mode="json")
+        event_bus.publish_threadsafe("job.updated", data)
 
 
-# Global job service & runner instances
+# Global instances
 job_service = JobService()
 job_runner = JobRunner()

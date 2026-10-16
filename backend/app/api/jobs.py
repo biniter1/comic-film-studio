@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Response
 
@@ -17,9 +17,13 @@ def list_jobs(status: Optional[str] = None) -> list[JobRead]:
 
 
 @router.post("/demo", response_model=JobRead)
-def create_demo_job(request: JobDemoRequest = JobDemoRequest()) -> JobRead:
+def create_demo_job(
+    request: JobDemoRequest = JobDemoRequest(),
+    job_type: Literal["demo_sleep", "demo_cpu"] = "demo_sleep",
+) -> JobRead:
+    """Create a demo job. Use job_type=demo_cpu to test the sync (CPU-bound) handler."""
     job = job_service.enqueue(
-        type="demo_sleep",
+        type=job_type,
         payload=request.model_dump(),
         max_attempts=3,
     )
