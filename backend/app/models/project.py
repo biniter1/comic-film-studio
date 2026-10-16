@@ -48,7 +48,8 @@ class Asset(SQLModel, table=True):
     id: str = Field(default_factory=lambda: new_id("A"), primary_key=True)
     project_id: str = Field(foreign_key="projects.id", index=True)
     chapter_id: Optional[str] = Field(default=None, foreign_key="chapters.id", index=True)
-    # page, page_preview, frame, ref, keyframe, boundary_raw, boundary_fixed, take, tts, export
+    # page, page_preview, frame, ref, char_sheet, location_sheet,
+    # keyframe, boundary_raw, boundary_fixed, take, tts, export
     kind: str = Field(index=True)
     # Relative to the project directory, always with forward slashes
     path: str

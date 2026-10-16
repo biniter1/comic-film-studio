@@ -23,6 +23,40 @@ class Character(SQLModel, table=True):
     look_lock: Optional[str] = None
     voice_id: Optional[str] = None
     status: str = "suggested"  # suggested | approved
+    height_class: str = "average"  # child | short | average | tall | giant
+    ref_frame_ids: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    look_status: str = "draft"  # draft | approved
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class CharacterOutfit(SQLModel, table=True):
+    __tablename__ = "character_outfits"
+
+    id: str = Field(default_factory=lambda: new_id("CO"), primary_key=True)
+    character_id: str = Field(foreign_key="characters.id", index=True)
+    key: str = Field(index=True)  # snake_case, unique per character
+    name_vi: str
+    outfit_lock: Optional[str] = None  # EN description
+    short_id: Optional[str] = None  # EN 3-6 words
+    is_default: bool = False
+    sheet_asset_id: Optional[str] = Field(default=None, foreign_key="assets.id")
+    sheet_status: str = "missing"  # missing | pending | approved
+    note: Optional[str] = None
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class Location(SQLModel, table=True):
+    __tablename__ = "locations"
+
+    id: str = Field(default_factory=lambda: new_id("LC"), primary_key=True)
+    project_id: str = Field(foreign_key="projects.id", index=True)
+    key: str = Field(index=True)  # snake_case, unique per project
+    name_vi: str
+    aliases: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    location_lock: Optional[str] = None  # EN description
+    ref_frame_ids: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    sheet_asset_id: Optional[str] = Field(default=None, foreign_key="assets.id")
+    sheet_status: str = "missing"  # missing | pending | approved
     created_at: datetime = Field(default_factory=utcnow)
 
 
