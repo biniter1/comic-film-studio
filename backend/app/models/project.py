@@ -34,6 +34,7 @@ class Chapter(SQLModel, table=True):
     title: str
     source_url: Optional[str] = None
     # empty | imported | frames_draft | frames_approved
+    # | analyzing | dialogue_draft | dialogue_approved
     status: str = Field(default="empty", index=True)
     # Strip geometry (webtoon): common width all pages are scaled to
     strip_width: Optional[int] = None
@@ -93,3 +94,7 @@ class Frame(SQLModel, table=True):
     x1: int
     y1: int
     origin: str = "auto"  # auto | manual
+    # Phase 2a — scene | dialogue_only | caption | sfx_only | credit (SPEC §4.5)
+    frame_type: Optional[str] = None
+    frame_type_source: Optional[str] = None  # ai | user
+    reading: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))

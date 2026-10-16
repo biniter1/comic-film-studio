@@ -9,7 +9,14 @@ export interface Project {
   storage_bytes?: number;
 }
 
-export type ChapterStatus = "empty" | "imported" | "frames_draft" | "frames_approved";
+export type ChapterStatus =
+  | "empty"
+  | "imported"
+  | "frames_draft"
+  | "frames_approved"
+  | "analyzing"
+  | "dialogue_draft"
+  | "dialogue_approved";
 
 export interface Chapter {
   id: string;
@@ -148,6 +155,9 @@ export const STATUS_LABEL: Record<ChapterStatus, string> = {
   imported: "Đã nhập trang",
   frames_draft: "Khung: bản nháp",
   frames_approved: "Khung: đã duyệt",
+  analyzing: "Đang phân tích",
+  dialogue_draft: "Thoại: bản nháp",
+  dialogue_approved: "Thoại: đã duyệt",
 };
 
 export function formatBytes(n?: number): string {

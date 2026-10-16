@@ -522,11 +522,20 @@ Vì composition là HTML thuần, **AI agent (Claude, Gemini, Antigravity) đọ
 | GET/PATCH | `/chapters/{cid}/pages` | Danh sách / đổi thứ tự + bỏ trang: body `{pages: [{id, excluded}]}` gồm **đủ** mọi trang theo thứ tự mới. Đổi trang → xóa khung (asset giữ lại), chapter về `imported` |
 | GET | `/chapters/{cid}/import/report` | Kết quả lần nhập gần nhất: `added`, `rejected` (lý do), `duplicates` |
 | POST | `/chapters/{cid}/frames/auto` | Job `stitch_and_cut` |
-| GET/PUT | `/chapters/{cid}/frames` | Lấy / ghi lại toàn bộ đường cắt (`[{y0,y1,x0,x1}]`) |
+| GET/PUT | `/chapters/{cid}/frames` | Lấy / ghi lại toàn bộ đường cắt (`[{y0,y1,x0,x1}]`). **Chỉ bỏ khung** → giữ kịch bản thoại (xóa câu của khung bị bỏ, tính lại anchor, chapter về `dialogue_draft`); **sửa/thêm khung** → xóa thoại & phân tích (chapter về `frames_draft`) |
 | POST | `/chapters/{cid}/frames/approve` | Duyệt khung |
-| POST | `/chapters/{cid}/analysis/{stage}` | `{mode: api|manual}` → job hoặc gói thủ công |
-| GET | `/chapters/{cid}/analysis/{stage}/bundle` | Tải gói cho Gemini app |
-| POST | `/chapters/{cid}/analysis/{stage}/paste` | Dán JSON kết quả thủ công |
+| POST | `/chapters/{cid}/analysis/{stage}` | `{mode: api|manual, then_dialogue?: bool}` → `{jobs}` (api; `read` mặc định nối thêm job `dialogue` phụ thuộc) hoặc `{units}` (manual). Job con bị chặn vì cha lỗi sẽ tự hủy khi bắt đầu lượt mới |
+| GET | `/chapters/{cid}/analysis/{stage}/units` | Các phần việc (lô khung / đoạn câu): `unit_index`, `mode`, `status`, `error` |
+| GET | `/chapters/{cid}/analysis/{stage}/bundle?unit=N` | Tải gói zip (prompt.txt + images/ + hướng dẫn) cho Gemini app |
+| POST | `/chapters/{cid}/analysis/{stage}/paste` | `{unit_index, raw}` → validate như API; sai → 422 `INVALID_OUTPUT` + `details.error` |
+| GET | `/chapters/{cid}/dialogue` | Kịch bản thoại: `frames` (loại khung), `lines`, `characters`, `stats`, `units` |
+| PATCH | `/dialogue/{lid}` | `text` (→ `edited_by=user`), `speaker_key`/`speaker_label`, `kind`, `anchor_frame_id` (null = tự động), `reviewed` |
+| POST | `/dialogue/{lid}/revert` | Về `text_raw` |
+| POST | `/chapters/{cid}/dialogue/review-all` · `/approve` · `/apply-glossary` | Đánh dấu đã xem tất cả · duyệt (409 `REVIEW_PENDING` nếu còn câu cần soát) · áp lại thuật ngữ đã duyệt |
+| PATCH | `/frames/{fid}` | `{frame_type}` → `frame_type_source=user`, tính lại anchor |
+| GET/POST | `/projects/{pid}/glossary` · `/address-rules` · `/characters` | Thư viện dự án |
+| PATCH/DELETE | `/glossary/{id}` · `/address-rules/{id}` · `/characters/{id}` | Sửa / duyệt (`status`) / xóa |
+| POST | `/glossary/{id}/merge` · `/characters/{id}/merge` | `{into_id}` — gộp biến thể / gộp nhân vật trùng (chuyển câu thoại + xưng hô) |
 | GET/PUT | `/projects/{pid}/bible` | Story Bible |
 | GET | `/chapters/{cid}/shots` | Shot list + scene + chain |
 | PATCH | `/shots/{sid}` | Sửa shot (prompt, thời lượng, transition…) → chạy lại luật §4.3 |
@@ -537,7 +546,7 @@ Vì composition là HTML thuần, **AI agent (Claude, Gemini, Antigravity) đọ
 | POST | `/tasks/{tid}/use-raw` | (boundary_fix) dùng khung gốc |
 | POST | `/assets/{aid}/approve` · `/reject` | Duyệt/từ chối keyframe, khung nối, take |
 | GET | `/assets/{aid}/file` | Phục vụ file (kiểm tra path nằm trong data dir) |
-| GET | `/chapters/{cid}/dialogue` · POST `/dialogue/{lid}/tts` | Thoại + TTS |
+| POST | `/dialogue/{lid}/tts` | TTS (Phase 4) |
 | POST | `/chapters/{cid}/export` | Job `export_capcut` |
 | GET | `/jobs?status=` · POST `/jobs/{jid}/retry` · `/cancel` | Job |
 | GET | `/events?chapter_id=` | **SSE**: `job.updated`, `task.updated`, `shot.updated`, `asset.created` |
@@ -594,7 +603,7 @@ Mã HTTP: 400 dữ liệu sai, 404 không tồn tại, 409 xung đột trạng t
 ## 12. Kiểm thử
 - **Unit**: `compute_shot_state`, `ready_tasks` (lập lịch chuỗi), luật §4.3, cắt khung (ảnh tổng hợp có gutter), validate schema, path safety, SSRF filter.
 - **Integration**: API + SQLite tạm; job runner (restart giữa chừng); ffmpeg với video mẫu nhỏ sinh bằng `ffmpeg -f lavfi testsrc`.
-- **Provider giả** (`FakeAnalysisProvider`) trả JSON cố định → test toàn luồng không tốn quota.
+- **Provider giả** (`app/providers/fake.py`) trả JSON theo kịch bản → test toàn luồng không tốn quota. Test Python thay `app.providers.registry.factory`; E2E chạy backend với `CFS_FAKE_PROVIDER=e2e` (chỉ dùng cho test, không bao giờ gọi API thật).
 - **E2E (Playwright)**: tạo project → nhập 3 ảnh mẫu → cắt khung → phân tích giả → duyệt kế hoạch → thả keyframe/take mẫu → duyệt → xuất gói → kiểm tra file.
 - CI: GitHub Actions (ubuntu) chạy `ruff`, `pytest`, `npm run build`, `npm run test`. Không gọi API thật trong CI.
 
