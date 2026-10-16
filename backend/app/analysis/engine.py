@@ -16,7 +16,7 @@ PROMPTS_DIR = Path(__file__).parent / "prompts"
 MAX_ATTEMPTS = 3
 
 
-def load_prompt(stage: str, version: str = "v1") -> str:
+def load_prompt(stage: str, version: str = "v2") -> str:
     return (PROMPTS_DIR / f"{stage}.{version}.md").read_text(encoding="utf-8")
 
 

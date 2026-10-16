@@ -15,7 +15,7 @@ from sqlmodel import Session, select
 
 from app import db
 from app.errors import AppError
-from app.frames.images import check_image
+from app.frames.images import _jpeg_bytes, check_image
 from app.models.analysis import Character, CharacterOutfit, Location
 from app.models.project import Asset, Chapter, Frame, Project
 from app.storage import asset_abs_path, project_dir, tmp_dir
@@ -439,12 +439,16 @@ LOCATION_SHEET_TEMPLATE = (
     "No text, no labels, no speech bubbles, no watermark."
 )
 
-HUONG_DAN_TEXT = """Hướng dẫn tạo Sheet nhất quán bằng Gemini:
-1. Mở app Gemini (hoặc web Gemini).
-2. Đính kèm các ảnh khung tham chiếu trong gói này theo đúng thứ tự (01_..., 02_...).
-3. Dán toàn bộ nội dung trong file prompt.txt vào ô chat.
-4. Chạy tạo ảnh 2–4 lần để chọn ảnh tốt nhất (rõ nét, đúng đặc điểm).
-5. Tải ảnh tốt nhất về máy và thả vào app Comic Film Studio để lưu và duyệt."""
+HUONG_DAN_TEXT = (
+    "Giải nén (Extract All) trước khi kéo ảnh vào Gemini — "
+    "kéo thẳng từ file zip sẽ bị lỗi tải lên. Mỗi gói dùng một cuộc chat MỚI.\n"
+    "Hướng dẫn tạo Sheet nhất quán bằng Gemini:\n"
+    "1. Mở app Gemini (hoặc web Gemini).\n"
+    "2. Đính kèm các ảnh khung tham chiếu trong gói này theo đúng thứ tự (01_..., 02_...).\n"
+    "3. Dán toàn bộ nội dung trong file prompt.txt vào ô chat.\n"
+    "4. Chạy tạo ảnh 2–4 lần để chọn ảnh tốt nhất (rõ nét, đúng đặc điểm).\n"
+    "5. Tải ảnh tốt nhất về máy và thả vào app Comic Film Studio để lưu và duyệt."
+)
 
 
 def get_sheet_bundle(target: TargetType, item_id: str) -> tuple[bytes, str]:
@@ -502,7 +506,8 @@ def get_sheet_bundle(target: TargetType, item_id: str) -> tuple[bytes, str]:
                     if asset:
                         abs_p = asset_abs_path(pid, asset.path)
                         if abs_p.is_file():
-                            zf.write(abs_p, arcname=f"{idx:02d}_{fid}.png")
+                            img_bytes = _jpeg_bytes(abs_p, max_side=1600, quality=85)
+                            zf.writestr(f"{idx:02d}_{fid}.jpg", img_bytes)
 
         return buf.getvalue(), zip_filename
 

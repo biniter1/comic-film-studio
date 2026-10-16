@@ -188,8 +188,8 @@ def test_sheet_bundle_outfit_and_location(client: TestClient):
         namelist = zf.namelist()
         assert "prompt.txt" in namelist
         assert "HUONG_DAN.txt" in namelist
-        assert f"01_{frames[0]}.png" in namelist
-        assert f"02_{frames[1]}.png" in namelist
+        assert f"01_{frames[0]}.jpg" in namelist
+        assert f"02_{frames[1]}.jpg" in namelist
 
         prompt_txt = zf.read("prompt.txt").decode("utf-8")
         assert "young man, black ponytail, sharp red eyes" in prompt_txt
@@ -221,8 +221,9 @@ def test_sheet_bundle_outfit_and_location(client: TestClient):
     with zipfile.ZipFile(io.BytesIO(loc_b2.content)) as zf:
         namelist = zf.namelist()
         assert "prompt.txt" in namelist
-        assert f"01_{frames[2]}.png" in namelist
+        assert f"01_{frames[2]}.jpg" in namelist
         prompt_txt = zf.read("prompt.txt").decode("utf-8")
+
         assert "establishing wide shot + reverse angle, no characters" in prompt_txt
         assert "lush spiritual herb garden, glowing plants, wooden fences" in prompt_txt
 

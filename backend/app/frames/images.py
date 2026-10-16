@@ -1,6 +1,7 @@
 """Image validation and previews (Pillow)."""
 
 import hashlib
+import io
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -9,7 +10,9 @@ from PIL import Image, UnidentifiedImageError
 MAX_IMAGE_BYTES = 30 * 1024 * 1024
 MIN_PAGE_WIDTH = 300
 PREVIEW_WIDTH = 400
+MAX_SIDE = 1600
 ALLOWED_FORMATS = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}
+
 
 # Pillow's decompression-bomb guard: webtoon pages are tall but not absurd
 Image.MAX_IMAGE_PIXELS = 200_000_000
@@ -65,3 +68,16 @@ def make_preview(src: Path, dst: Path, width: int = PREVIEW_WIDTH) -> tuple[int,
         h = max(1, round(im.height * width / im.width))
         im.resize((width, h), Image.LANCZOS).save(dst, "JPEG", quality=82)
         return width, h
+
+
+def _jpeg_bytes(path: Path | str, max_side: int = MAX_SIDE, quality: int = 85) -> bytes:
+    with Image.open(path) as im:
+        im = im.convert("RGB")
+        s = max(im.size)
+        if s > max_side:
+            im = im.resize(
+                (round(im.width * max_side / s), round(im.height * max_side / s)), Image.LANCZOS
+            )
+        buf = io.BytesIO()
+        im.save(buf, "JPEG", quality=quality)
+        return buf.getvalue()

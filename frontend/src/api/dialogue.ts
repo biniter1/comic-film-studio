@@ -165,11 +165,15 @@ export const dialogueApi = {
   units: (cid: string, stage: Stage) => request<UnitInfo[]>(`/chapters/${cid}/analysis/${stage}/units`),
   bundleUrl: (cid: string, stage: Stage, unit: number) =>
     `/api/chapters/${cid}/analysis/${stage}/bundle?unit=${unit}`,
-  paste: (cid: string, stage: Stage, unit_index: number, raw: string) =>
-    request<{ units: UnitInfo[] }>(`/chapters/${cid}/analysis/${stage}/paste`, {
-      method: "POST",
-      ...json({ unit_index, raw }),
-    }),
+  paste: (cid: string, stage: Stage, unit_index: number | null | undefined, raw: string) =>
+    request<{ units: UnitInfo[]; matched_unit?: number; message_vi?: string }>(
+      `/chapters/${cid}/analysis/${stage}/paste`,
+      {
+        method: "POST",
+        ...json({ unit_index: unit_index ?? undefined, raw }),
+      }
+    ),
+
   patchLine: (lid: string, patch: LinePatch) =>
     request<DialogueLine>(`/dialogue/${lid}`, { method: "PATCH", ...json(patch) }),
   revertLine: (lid: string) => request<DialogueLine>(`/dialogue/${lid}/revert`, { method: "POST" }),

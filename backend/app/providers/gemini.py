@@ -1,27 +1,11 @@
 """Gemini adapter (google-genai SDK)."""
 
-import io
 import re
 
-from PIL import Image
-
+from app.frames.images import _jpeg_bytes
 from app.providers.base import ProviderError, ProviderRequest
 
-MAX_SIDE = 1600
 QUOTA_HINT = "Hết hạn mức Gemini. Dùng chế độ thủ công hoặc chờ hạn mức được làm mới."
-
-
-def _jpeg_bytes(path) -> bytes:
-    with Image.open(path) as im:
-        im = im.convert("RGB")
-        s = max(im.size)
-        if s > MAX_SIDE:
-            im = im.resize(
-                (round(im.width * MAX_SIDE / s), round(im.height * MAX_SIDE / s)), Image.LANCZOS
-            )
-        buf = io.BytesIO()
-        im.save(buf, "JPEG", quality=85)
-        return buf.getvalue()
 
 
 def classify_client_error(code: int | None, message: str) -> ProviderError:
