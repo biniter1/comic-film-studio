@@ -29,6 +29,25 @@ export interface DialogueLine {
   reviewed: boolean;
 }
 
+export type HeightClass = "child" | "short" | "average" | "tall" | "giant";
+export type LookStatus = "draft" | "approved";
+export type SheetStatus = "missing" | "pending" | "approved";
+
+export interface CharacterOutfit {
+  id: string;
+  character_id: string;
+  key: string;
+  name_vi: string;
+  outfit_lock: string | null;
+  short_id: string | null;
+  is_default: boolean;
+  sheet_asset_id: string | null;
+  sheet_status: SheetStatus;
+  sheet_url: string | null;
+  note: string | null;
+  created_at?: string;
+}
+
 export interface Character {
   id: string;
   project_id: string;
@@ -38,8 +57,41 @@ export interface Character {
   gender: Gender;
   age_group: AgeGroup;
   voice_style: string | null;
+  look_lock: string | null;
+  height_class: HeightClass;
+  ref_frame_ids: string[];
+  look_status: LookStatus;
   status: ReviewStatus;
   line_count?: number;
+  outfits?: CharacterOutfit[];
+}
+
+export interface LocationItem {
+  id: string;
+  project_id: string;
+  key: string;
+  name_vi: string;
+  aliases: string[];
+  location_lock: string | null;
+  ref_frame_ids: string[];
+  sheet_asset_id: string | null;
+  sheet_status: SheetStatus;
+  sheet_url: string | null;
+  created_at?: string;
+}
+
+export interface BibleData {
+  project_id: string;
+  characters: Character[];
+  locations: LocationItem[];
+}
+
+export interface FrameSuggestion {
+  id: string;
+  chapter_id: string;
+  idx: number;
+  frame_type: FrameType | null;
+  image_url: string;
 }
 
 export interface DialogueFrame {
@@ -153,6 +205,38 @@ export const dialogueApi = {
   deleteCharacter: (id: string) => request<unknown>(`/characters/${id}`, { method: "DELETE" }),
   mergeCharacter: (id: string, into_id: string) =>
     request<Character>(`/characters/${id}/merge`, { method: "POST", ...json({ into_id }) }),
+
+  bible: (pid: string) => request<BibleData>(`/projects/${pid}/bible`),
+  frameSuggestions: (chid: string) =>
+    request<FrameSuggestion[]>(`/characters/${chid}/frame-suggestions`),
+  outfits: (chid: string) => request<CharacterOutfit[]>(`/characters/${chid}/outfits`),
+  createOutfit: (chid: string, o: Partial<CharacterOutfit>) =>
+    request<CharacterOutfit>(`/characters/${chid}/outfits`, { method: "POST", ...json(o) }),
+  updateOutfit: (oid: string, o: Partial<CharacterOutfit>) =>
+    request<CharacterOutfit>(`/outfits/${oid}`, { method: "PATCH", ...json(o) }),
+  deleteOutfit: (oid: string) => request<unknown>(`/outfits/${oid}`, { method: "DELETE" }),
+
+  locations: (pid: string) => request<LocationItem[]>(`/projects/${pid}/locations`),
+  createLocation: (pid: string, l: Partial<LocationItem>) =>
+    request<LocationItem>(`/projects/${pid}/locations`, { method: "POST", ...json(l) }),
+  updateLocation: (lid: string, l: Partial<LocationItem>) =>
+    request<LocationItem>(`/locations/${lid}`, { method: "PATCH", ...json(l) }),
+  deleteLocation: (lid: string) => request<unknown>(`/locations/${lid}`, { method: "DELETE" }),
+
+  sheetBundleUrl: (target: "outfits" | "locations", id: string) =>
+    `/api/${target}/${id}/sheet-bundle`,
+  uploadSheet: (target: "outfits" | "locations", id: string, file: File) => {
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    return request<CharacterOutfit | LocationItem>(`/${target}/${id}/sheet`, {
+      method: "POST",
+      body: fd,
+    });
+  },
+  approveSheet: (target: "outfits" | "locations", id: string) =>
+    request<CharacterOutfit | LocationItem>(`/${target}/${id}/sheet/approve`, { method: "POST" }),
+  rejectSheet: (target: "outfits" | "locations", id: string) =>
+    request<CharacterOutfit | LocationItem>(`/${target}/${id}/sheet/reject`, { method: "POST" }),
 };
 
 export const FRAME_TYPE_LABEL: Record<FrameType, string> = {
@@ -181,6 +265,25 @@ export const AGE_LABEL: Record<AgeGroup, string> = {
   middle_aged: "Trung niên",
   elderly: "Già",
   unknown: "?",
+};
+
+export const HEIGHT_CLASS_LABEL: Record<HeightClass, string> = {
+  child: "Trẻ em",
+  short: "Thấp",
+  average: "Trung bình",
+  tall: "Cao",
+  giant: "Khổng lồ",
+};
+
+export const SHEET_STATUS_LABEL: Record<SheetStatus, string> = {
+  missing: "Chưa có",
+  pending: "Chờ duyệt",
+  approved: "Đã duyệt",
+};
+
+export const LOOK_STATUS_LABEL: Record<LookStatus, string> = {
+  draft: "Bản nháp",
+  approved: "Đã duyệt",
 };
 
 export const TERM_KIND_LABEL: Record<string, string> = {
