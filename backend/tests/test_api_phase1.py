@@ -162,3 +162,14 @@ def test_asset_404_for_unknown_id(c):
 def test_unused_helpers_render():
     # keep helper import used (gutter) for linters
     assert gutter(1).shape == (1, 600, 3)
+
+
+def test_drop_a_frame_leaves_a_gap(c, tmp_path):
+    """Removing a frame (ad / translator banner) = PUT without it; gaps are allowed."""
+    cid = _chapter_with_frames(c, tmp_path)
+    f0, f1, f2 = c.get(f"/api/chapters/{cid}/frames").json()["frames"]
+    body = {"frames": [{"y0": f0["y0"], "y1": f0["y1"]}, {"y0": f2["y0"], "y1": f2["y1"]}]}
+    out = c.put(f"/api/chapters/{cid}/frames", json=body).json()["frames"]
+    assert [f["asset_id"] for f in out] == [f0["asset_id"], f2["asset_id"]]
+    assert [f["idx"] for f in out] == [1, 2]
+    assert c.post(f"/api/chapters/{cid}/frames/approve").status_code == 200

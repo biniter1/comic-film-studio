@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Combine, ImageOff, RotateCcw, Save, Scissors, Undo2 } from "lucide-react";
+import { CheckCircle2, Combine, ImageOff, RotateCcw, Save, Scissors, Undo2, X } from "lucide-react";
 import { FrameItem, rememberChapter, studio } from "../api/studio";
 import { Button, Empty, ErrorBox, JobProgress, PageHeader, StatusBadge } from "../components/common";
 import { useJob } from "../api/useJob";
@@ -62,7 +62,15 @@ export function FramesPage() {
     });
   }, []);
 
+  /** Drop a frame (ads, credits, translator banners). Its area becomes unused strip. */
+  const remove = (i: number) => {
+    commit(ranges.filter((_, j) => j !== i));
+    setSelected(null);
+  };
   const merge = (i: number) => {
+    const gap = ranges[i + 1].y0 - ranges[i].y1;
+    if (gap > 300 && !window.confirm("Giữa hai khung có phần đã bỏ. Gộp sẽ lấy lại cả phần đó. Tiếp tục?"))
+      return;
     const next = [...ranges];
     next.splice(i, 2, { y0: ranges[i].y0, y1: ranges[i + 1].y1 });
     commit(next);
@@ -154,11 +162,17 @@ export function FramesPage() {
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
         e.preventDefault();
         if (dirty && !save.isPending) save.mutate();
+      } else if ((e.key === "Delete" || e.key === "Backspace") && selected !== null && !busy) {
+        const tag = (e.target as HTMLElement | null)?.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA") return;
+        e.preventDefault();
+        remove(selected);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [undo, dirty, save]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [undo, dirty, save, selected, busy, ranges]);
   // warn before leaving with unsaved edits
   useEffect(() => {
     if (!dirty) return;
@@ -242,8 +256,8 @@ export function FramesPage() {
           {/* ---- strip editor ---- */}
           <div>
             <div className="text-xs text-gray-500 mb-2 w-[380px]">
-              Kéo mép trên/dưới để chỉnh · bấm <b>Gộp</b> giữa hai khung để nối · <b>Alt + bấm</b> (hoặc chế độ cắt)
-              để tách khung
+              Kéo mép trên/dưới để chỉnh · <b>Gộp</b> giữa hai khung để nối · <b>Alt + bấm</b> (hoặc chế độ cắt)
+              để tách · <b>×</b> hoặc phím <b>Delete</b> để bỏ khung (quảng cáo, banner nhóm dịch)
             </div>
             <div
               ref={stripRef}
@@ -262,6 +276,28 @@ export function FramesPage() {
                   style={{ top: p.y0 * k, height: (p.y1 - p.y0) * k }}
                 />
               ))}
+              {[...ranges.map((r, i) => [i === 0 ? 0 : ranges[i - 1].y1, r.y0]), [
+                ranges.length ? ranges[ranges.length - 1].y1 : 0,
+                strip.height,
+              ]]
+                .filter(([a, b]) => b - a >= 20)
+                .map(([a, b]) => (
+                  <div
+                    key={`gap${a}`}
+                    data-testid="unused-area"
+                    className="absolute left-0 w-full bg-black/70 flex items-center justify-center pointer-events-none"
+                    style={{
+                      top: a * k,
+                      height: (b - a) * k,
+                      backgroundImage:
+                        "repeating-linear-gradient(45deg, rgba(255,255,255,0.07) 0 6px, transparent 6px 12px)",
+                    }}
+                  >
+                    {(b - a) * k > 18 && (b - a) > 150 && (
+                      <span className="text-[10px] text-gray-400 bg-black/70 px-1.5 rounded">Không dùng</span>
+                    )}
+                  </div>
+                ))}
               {ranges.map((r, i) => {
                 const saved = savedByKey.has(`${r.y0}:${r.y1}`);
                 return (
@@ -282,6 +318,18 @@ export function FramesPage() {
                     <span className="absolute top-0 left-0 px-1.5 py-0.5 text-[10px] font-bold bg-black/75 text-white">
                       {i + 1}
                     </span>
+                    <button
+                      data-testid="remove-btn"
+                      title={`Bỏ khung ${i + 1} (Delete)`}
+                      disabled={busy}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        remove(i);
+                      }}
+                      className="absolute top-0.5 right-0.5 z-10 p-0.5 rounded bg-black/75 text-gray-200 hover:bg-red-600 hover:text-white"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
                     {(["top", "bottom"] as const).map((edge) => (
                       <div
                         key={edge}
@@ -325,13 +373,15 @@ export function FramesPage() {
               {ranges.map((r, i) => {
                 const f = savedByKey.get(`${r.y0}:${r.y1}`);
                 return (
-                  <button
+                  <div
                     key={`l${i}-${r.y0}`}
+                    role="button"
+                    tabIndex={0}
                     onClick={() => {
                       setSelected(i);
                       frameRefs.current[i]?.scrollIntoView({ behavior: "smooth", block: "center" });
                     }}
-                    className={`text-left rounded-lg border bg-surface overflow-hidden ${
+                    className={`group relative text-left rounded-lg border bg-surface overflow-hidden cursor-pointer ${
                       selected === i ? "border-sky-400" : "border-border hover:border-primary/60"
                     }`}
                   >
@@ -348,7 +398,18 @@ export function FramesPage() {
                         {r.y1 - r.y0}px{f?.origin === "manual" ? " · sửa tay" : ""}
                       </span>
                     </div>
-                  </button>
+                    <button
+                      title="Bỏ khung này"
+                      disabled={busy}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        remove(i);
+                      }}
+                      className="absolute top-1 right-1 p-1 rounded bg-black/70 text-gray-200 opacity-0 group-hover:opacity-100 hover:bg-red-600"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 );
               })}
             </div>

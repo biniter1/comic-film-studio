@@ -55,4 +55,13 @@ test("phase 1: project → chapter → import folder → auto frames → merge �
   // undo
   await page.keyboard.press("Control+z");
   await expect(page.getByTestId("frame-box")).toHaveCount(2);
+
+  // drop a frame (e.g. translator banner) → saved list shrinks, area shown as unused
+  await page.getByTestId("remove-btn").last().click();
+  await expect(page.getByTestId("frame-box")).toHaveCount(1);
+  await page.getByRole("button", { name: /Lưu/ }).click();
+  await expect(page.getByText("Chưa lưu")).toHaveCount(0, { timeout: 10_000 });
+  await page.reload();
+  await expect(page.getByTestId("frame-box")).toHaveCount(1);
+  await expect(page.getByTestId("unused-area").last()).toBeVisible();
 });
