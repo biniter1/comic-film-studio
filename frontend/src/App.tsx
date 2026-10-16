@@ -7,10 +7,12 @@ import { PlaceholderPage } from "./pages/PlaceholderPage";
 import { ProjectDetailPage, ProjectsPage } from "./pages/ProjectsPage";
 import { ImportPage } from "./pages/ImportPage";
 import { FramesPage } from "./pages/FramesPage";
+import { DialoguePage } from "./pages/DialoguePage";
+import { GlossaryPage } from "./pages/GlossaryPage";
 import { lastChapter } from "./api/studio";
 
 /** Sidebar shortcuts open the last chapter you worked on (or the project list). */
-function LastChapter({ to }: { to: "import" | "frames" }) {
+function LastChapter({ to }: { to: "import" | "frames" | "dialogue" }) {
   const cid = lastChapter();
   return <Navigate to={cid ? `/chapters/${cid}/${to}` : "/projects"} replace />;
 }
@@ -37,16 +39,9 @@ export function App() {
             <Route path="chapters/:cid/frames" element={<FramesPage />} />
             <Route path="import" element={<LastChapter to="import" />} />
             <Route path="frames" element={<LastChapter to="frames" />} />
-            <Route
-              path="script"
-              element={
-                <PlaceholderPage
-                  title="Kịch bản & Story Bible"
-                  phase="Phase 2"
-                  description="Hồ sơ nhân vật, chiêu thức võ công và phân cảnh AI"
-                />
-              }
-            />
+            <Route path="chapters/:cid/dialogue" element={<DialoguePage />} />
+            <Route path="projects/:pid/glossary" element={<GlossaryPage />} />
+            <Route path="script" element={<LastChapter to="dialogue" />} />
             <Route
               path="shot-board"
               element={

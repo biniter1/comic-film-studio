@@ -61,6 +61,7 @@ def create_project_dir(project_id: str, data_dir: Path | None = None) -> Path:
     project_dir = resolve_safe_path(d / "projects", project_id)
     project_dir.mkdir(parents=True, exist_ok=True)
     (project_dir / "refs").mkdir(parents=True, exist_ok=True)
+    (project_dir / "locations").mkdir(parents=True, exist_ok=True)
     (project_dir / "chapters").mkdir(parents=True, exist_ok=True)
     return project_dir
 

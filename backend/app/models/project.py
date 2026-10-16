@@ -34,6 +34,7 @@ class Chapter(SQLModel, table=True):
     title: str
     source_url: Optional[str] = None
     # empty | imported | frames_draft | frames_approved
+    # | analyzing | dialogue_draft | dialogue_approved
     status: str = Field(default="empty", index=True)
     # Strip geometry (webtoon): common width all pages are scaled to
     strip_width: Optional[int] = None
@@ -47,7 +48,8 @@ class Asset(SQLModel, table=True):
     id: str = Field(default_factory=lambda: new_id("A"), primary_key=True)
     project_id: str = Field(foreign_key="projects.id", index=True)
     chapter_id: Optional[str] = Field(default=None, foreign_key="chapters.id", index=True)
-    # page, page_preview, frame, ref, keyframe, boundary_raw, boundary_fixed, take, tts, export
+    # page, page_preview, frame, ref, char_sheet, location_sheet,
+    # keyframe, boundary_raw, boundary_fixed, take, tts, export
     kind: str = Field(index=True)
     # Relative to the project directory, always with forward slashes
     path: str
@@ -93,3 +95,7 @@ class Frame(SQLModel, table=True):
     x1: int
     y1: int
     origin: str = "auto"  # auto | manual
+    # Phase 2a — scene | dialogue_only | caption | sfx_only | credit (SPEC §4.5)
+    frame_type: Optional[str] = None
+    frame_type_source: Optional[str] = None  # ai | user
+    reading: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))

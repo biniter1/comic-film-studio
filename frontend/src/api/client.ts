@@ -75,10 +75,14 @@ export interface ProviderStatus {
 
 export async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const url = path.startsWith("/api") ? path : `/api${path.startsWith("/") ? path : `/${path}`}`;
+  const defaultHeaders: Record<string, string> = {};
+  if (!(options?.body instanceof FormData)) {
+    defaultHeaders["Content-Type"] = "application/json";
+  }
   const response = await fetch(url, {
     ...options,
     headers: {
-      "Content-Type": "application/json",
+      ...defaultHeaders,
       ...options?.headers,
     },
   });

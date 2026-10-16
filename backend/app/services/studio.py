@@ -21,12 +21,19 @@ from app.errors import AppError
 from app.frames import strip as stripmod
 from app.frames.images import check_image, make_preview
 from app.jobs.event_bus import event_bus
+from app.models.analysis import AnalysisRun, DialogueLine
 from app.models.job import Job
 from app.models.project import Asset, Chapter, Frame, Project, SourcePage, new_id
 from app.storage import asset_abs_path, chapter_dir, project_dir, to_relative
 
 Progress = Callable[[float, str | None], None]
-CHAPTER_JOB_TYPES = ("import_local", "import_url", "stitch_and_cut")
+CHAPTER_JOB_TYPES = (
+    "import_local",
+    "import_url",
+    "stitch_and_cut",
+    "analysis_read",
+    "analysis_dialogue",
+)
 
 
 def _now() -> datetime:
@@ -226,7 +233,19 @@ def delete_chapter(cid: str) -> None:
     _move_to_trash(chapter_dir(pid, cid), f"chapter_{cid}")
 
 
+def drop_analysis(s: Session, cid: str) -> int:
+    """Frames changed → dialogue/analysis built on them is stale (and FK-bound). Remove it."""
+    lines = s.exec(select(DialogueLine).where(DialogueLine.chapter_id == cid)).all()
+    for d in lines:
+        s.delete(d)
+    for r in s.exec(select(AnalysisRun).where(AnalysisRun.chapter_id == cid)).all():
+        s.delete(r)
+    s.flush()
+    return len(lines)
+
+
 def _delete_chapter_rows(s: Session, cid: str) -> None:
+    drop_analysis(s, cid)
     for f in s.exec(select(Frame).where(Frame.chapter_id == cid)).all():
         s.delete(f)
     for p in s.exec(select(SourcePage).where(SourcePage.chapter_id == cid)).all():
@@ -422,6 +441,7 @@ def update_pages(cid: str, order: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _invalidate_frames(s: Session, ch: Chapter) -> None:
     """Pages changed → existing frames no longer match the strip. Rows go, files/assets stay."""
+    drop_analysis(s, ch.id)
     for f in s.exec(select(Frame).where(Frame.chapter_id == ch.id)).all():
         s.delete(f)
     ch.strip_width = None
@@ -457,6 +477,7 @@ def auto_frames(cid: str, progress: Progress | None = None) -> int:
     with _session() as s:
         c = s.get(Chapter, cid)
         assert c
+        drop_analysis(s, cid)
         for f in s.exec(select(Frame).where(Frame.chapter_id == cid)).all():
             s.delete(f)
         c.strip_width = strip.width
@@ -567,9 +588,25 @@ def put_frames(cid: str, ranges: list[tuple[int, int]]) -> dict[str, Any]:
     with _session() as s:
         existing = {(f.y0, f.y1): f for f in s.exec(select(Frame).where(Frame.chapter_id == cid))}
         keep = set(ranges)
-        for key, f in existing.items():
-            if key not in keep:
-                s.delete(f)
+        changed = set(existing) != keep
+        # Only removing frames (e.g. a translator banner) keeps the script: just the removed
+        # frames' lines go. New/changed ranges → the analysis no longer matches → drop it.
+        removal_only = changed and keep <= set(existing)
+        if changed and not removal_only:
+            drop_analysis(s, cid)
+        removed = [f for key, f in existing.items() if key not in keep]
+        if removed:
+            gone = {f.id for f in removed}
+            for d in s.exec(select(DialogueLine).where(DialogueLine.chapter_id == cid)):
+                if d.source_frame_id in gone:
+                    s.delete(d)
+                elif d.anchor_frame_id in gone:
+                    d.anchor_frame_id = None
+                    d.anchor_locked = False
+                    s.add(d)
+            s.flush()
+        for f in removed:
+            s.delete(f)
         for i, key in enumerate(ranges, 1):
             if key in existing:
                 existing[key].idx = i
@@ -585,7 +622,14 @@ def put_frames(cid: str, ranges: list[tuple[int, int]]) -> dict[str, Any]:
     with _session() as s:
         c = s.get(Chapter, cid)
         assert c
-        c.status = "frames_draft"
+        has_script = c.status in ("dialogue_draft", "dialogue_approved")
+        if removal_only and has_script:
+            from app.analysis.stages import recompute_anchors
+
+            recompute_anchors(s, cid)
+            c.status = "dialogue_draft"
+        elif changed or c.status not in ("frames_approved", "dialogue_draft", "dialogue_approved"):
+            c.status = "frames_draft"
         c.updated_at = _now()
         s.add(c)
         s.commit()
@@ -603,7 +647,8 @@ def approve_frames(cid: str) -> dict[str, Any]:
         n = len(s.exec(select(Frame).where(Frame.chapter_id == cid)).all())
         if n == 0:
             raise AppError("NO_FRAMES", "Chưa có khung nào để duyệt", status_code=409)
-        c.status = "frames_approved"
+        if c.status not in ("analyzing", "dialogue_draft", "dialogue_approved"):
+            c.status = "frames_approved"  # later stages keep their status (frames unchanged)
         c.updated_at = _now()
         s.add(c)
         s.commit()
