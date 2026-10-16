@@ -50,6 +50,9 @@ export interface SettingsData {
   max_parallel_muse_tabs: number;
   muse_clip_seconds: number;
   gemini_configured: boolean;
+  gemini_key_hint: string | null;
+  analysis_model_vision: string;
+  analysis_model_text: string;
   ffmpeg_available: boolean;
   ffmpeg_version: string | null;
 }
@@ -111,6 +114,7 @@ export async function request<T>(path: string, options?: RequestInit): Promise<T
 }
 
 export const api = {
+  getJob: (id: string) => request<Job>(`/jobs/${id}`),
   getJobs: (status?: string) =>
     request<Job[]>(status ? `/jobs?status=${encodeURIComponent(status)}` : "/jobs"),
   createDemoJob: (payload?: { duration_s?: number; fail?: boolean; fail_category?: string }) =>
@@ -139,6 +143,13 @@ export const api = {
     request<SettingsData>("/settings", {
       method: "PUT",
       body: JSON.stringify(data),
+    }),
+  saveGeminiKey: (api_key: string) =>
+    request<SettingsData>("/settings/gemini-key", { method: "PUT", body: JSON.stringify({ api_key }) }),
+  deleteGeminiKey: () => request<SettingsData>("/settings/gemini-key", { method: "DELETE" }),
+  testGeminiKey: () =>
+    request<{ ok: boolean; message_vi: string; model: string | null }>("/settings/gemini-key/test", {
+      method: "POST",
     }),
   getProvidersStatus: () =>
     request<ProviderStatus>("/settings/providers/status"),

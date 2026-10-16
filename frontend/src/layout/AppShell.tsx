@@ -1,4 +1,4 @@
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useEvents } from "../api/events";
 import { api } from "../api/client";
@@ -30,7 +30,20 @@ const NAV_ITEMS = [
   { to: "/settings", label: "Cài đặt", icon: Settings },
 ];
 
+const ACTIVE =
+  "flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-xs font-medium transition bg-primary text-white shadow-sm";
+const IDLE =
+  "flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-xs font-medium transition text-gray-400 hover:text-gray-200 hover:bg-surface-raised/60";
+
+/** Chapter screens live under /chapters/:cid/{import,frames}; keep their nav item highlighted. */
+function navActive(to: string, isActive: boolean, path: string): boolean {
+  if (to === "/import") return isActive || /^\/chapters\/[^/]+\/import/.test(path);
+  if (to === "/frames") return isActive || /^\/chapters\/[^/]+\/frames/.test(path);
+  return isActive;
+}
+
 export function AppShell() {
+  const location = useLocation();
   const { isConnected } = useEvents();
 
   const { data: jobs = [] } = useQuery({
@@ -67,11 +80,7 @@ export function AppShell() {
                   key={item.to}
                   to={item.to}
                   className={({ isActive }) =>
-                    `flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-xs font-medium transition ${
-                      isActive
-                        ? "bg-primary text-white shadow-sm"
-                        : "text-gray-400 hover:text-gray-200 hover:bg-surface-raised/60"
-                    }`
+                    navActive(item.to, isActive, location.pathname) ? ACTIVE : IDLE
                   }
                 >
                   <Icon className="w-4 h-4" />

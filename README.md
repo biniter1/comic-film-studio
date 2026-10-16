@@ -120,3 +120,11 @@ npm run build
 | **3** | Hàng chờ thủ công, take, khung nối | ⏳ |
 | **4** | Nhân vật, TTS, xuất CapCut | ⏳ |
 | **5** | Hoàn thiện & đánh bóng | ⏳ |
+
+## Kiểm thử end-to-end (Phase 1+)
+```powershell
+cd frontend
+npx playwright install chromium   # lần đầu
+npm run e2e                       # build frontend + chạy backend thật trên thư mục dữ liệu tạm + Playwright
+```
+Ảnh chụp màn hình lưu ở `frontend/e2e/screenshots/`.

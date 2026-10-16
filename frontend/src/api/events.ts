@@ -42,6 +42,18 @@ export function useEvents(chapterId?: string) {
       }
     });
 
+    es.addEventListener("chapter.updated", (event) => {
+      try {
+        const ch = JSON.parse(event.data) as { id: string; project_id: string };
+        queryClient.invalidateQueries({ queryKey: ["chapter", ch.id] });
+        queryClient.invalidateQueries({ queryKey: ["pages", ch.id] });
+        queryClient.invalidateQueries({ queryKey: ["frames", ch.id] });
+        queryClient.invalidateQueries({ queryKey: ["chapters", ch.project_id] });
+      } catch (err) {
+        console.error("Failed to parse chapter.updated event:", err);
+      }
+    });
+
     return () => {
       es.close();
       setIsConnected(false);

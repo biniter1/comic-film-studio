@@ -32,7 +32,7 @@ Người dùng tạo project → tạo chapter → nhập ảnh (URL hoặc thư
 6. **Ghép & cắt** — job `stitch_and_cut` (`app/frames/`):
    - Port `stitch_vertical`, `split_image`, `_gutter_mask`, `_runs`, `_merge_close` từ prototype; bỏ phần AI (`_ai_groups`) — để Phase 5.
    - Mảnh < 160px gộp vào mảnh kế; đoạn liền > 2400px chia nhỏ.
-   - Lưu `stitched.jpg` (nếu cao > 60.000px thì lưu thêm bản thu nhỏ `stitched_preview.jpg` rộng 400px cho UI).
+   - ~~Lưu `stitched.jpg`~~ → thay bằng **dải ảo** (SPEC §6.3): không ghi file ghép, UI dùng preview từng trang.
    - Tạo `Frame` (`origin=auto`) + ảnh cắt `frames/F001.png…` từ **ảnh gốc full-res**.
 7. **Chỉnh khung** — `PUT /chapters/{cid}/frames` nhận toàn bộ danh sách khoảng `[{y0, y1}]` (webtoon chỉ cắt ngang ở phase này; `x0/x1` = toàn chiều rộng):
    - Validate: tăng dần, không chồng lấn, nằm trong ảnh, mỗi khung ≥ 40px.

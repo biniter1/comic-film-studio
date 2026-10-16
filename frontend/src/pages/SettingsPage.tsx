@@ -29,16 +29,42 @@ export function SettingsPage() {
     }
   }, [settings]);
 
+  const [keyMsg, setKeyMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const refreshStatus = () => {
+    queryClient.invalidateQueries({ queryKey: ["settings"] });
+    queryClient.invalidateQueries({ queryKey: ["providers-status"] });
+  };
+  const testKey = useMutation({
+    mutationFn: () => api.testGeminiKey(),
+    onSuccess: (r) => setKeyMsg({ ok: r.ok, text: r.message_vi }),
+    onError: (e: unknown) => setKeyMsg({ ok: false, text: e instanceof Error ? e.message : String(e) }),
+  });
+  const saveKey = useMutation({
+    mutationFn: () => api.saveGeminiKey(geminiKeyInput.trim()),
+    onSuccess: () => {
+      setGeminiKeyInput("");
+      setKeyMsg({ ok: true, text: "Đã lưu API key. Đang kiểm tra kết nối…" });
+      refreshStatus();
+      testKey.mutate();
+    },
+    onError: (e: unknown) => setKeyMsg({ ok: false, text: e instanceof Error ? e.message : String(e) }),
+  });
+  const deleteKey = useMutation({
+    mutationFn: () => api.deleteGeminiKey(),
+    onSuccess: () => {
+      setKeyMsg({ ok: true, text: "Đã xóa API key." });
+      refreshStatus();
+    },
+  });
+
   const updateMutation = useMutation({
     mutationFn: () =>
       api.updateSettings({
         job_concurrency: concurrency,
         max_parallel_muse_tabs: maxTabs,
         muse_clip_seconds: clipSeconds,
-        ...(geminiKeyInput.trim() ? { gemini_api_key: geminiKeyInput.trim() } : {}),
       }),
     onSuccess: () => {
-      setGeminiKeyInput("");
       setSaveSuccess(true);
       queryClient.invalidateQueries({ queryKey: ["settings"] });
       queryClient.invalidateQueries({ queryKey: ["providers-status"] });
@@ -114,21 +140,69 @@ export function SettingsPage() {
             )}
           </div>
 
-          <div className="space-y-1">
+          <form
+            className="space-y-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (geminiKeyInput.trim()) saveKey.mutate();
+            }}
+          >
             <label className="text-xs text-gray-400">
-              {isGeminiConfigured ? "Cập nhật API Key mới (để trống nếu không đổi)" : "Nhập Gemini API Key:"}
+              {isGeminiConfigured
+                ? `Đang dùng key ${settings.gemini_key_hint ?? ""} — dán key mới để thay`
+                : "Dán Gemini API Key (lấy ở aistudio.google.com → Get API key):"}
             </label>
-            <input
-              type="password"
-              value={geminiKeyInput}
-              onChange={(e) => setGeminiKeyInput(e.target.value)}
-              placeholder="AIzaSy..."
-              className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-primary"
-            />
+            <div className="flex gap-2">
+              <input
+                type="password"
+                value={geminiKeyInput}
+                onChange={(e) => setGeminiKeyInput(e.target.value)}
+                placeholder="AIzaSy…"
+                autoComplete="off"
+                className="flex-1 bg-background border border-border rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-primary"
+              />
+              <button
+                type="submit"
+                disabled={!geminiKeyInput.trim() || saveKey.isPending}
+                className="inline-flex items-center gap-1.5 px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg text-sm font-medium disabled:opacity-40"
+              >
+                <KeyRound className="w-4 h-4" /> {saveKey.isPending ? "Đang lưu…" : "Lưu key"}
+              </button>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={!isGeminiConfigured || testKey.isPending}
+                onClick={() => testKey.mutate()}
+                className="px-3 py-1.5 rounded-lg text-xs border border-border bg-surface-raised text-gray-200 hover:bg-gray-700 disabled:opacity-40"
+              >
+                {testKey.isPending ? "Đang kiểm tra…" : "Kiểm tra kết nối"}
+              </button>
+              {isGeminiConfigured && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (window.confirm("Xóa API key Gemini khỏi máy?")) deleteKey.mutate();
+                  }}
+                  className="px-3 py-1.5 rounded-lg text-xs border border-red-900 bg-red-950/40 text-red-200 hover:bg-red-900/60"
+                >
+                  Xóa key
+                </button>
+              )}
+              {keyMsg && (
+                <span
+                  data-testid="key-msg"
+                  className={`text-xs ${keyMsg.ok ? "text-emerald-400" : "text-red-300"}`}
+                >
+                  {keyMsg.ok ? "✓ " : "✗ "}
+                  {keyMsg.text}
+                </span>
+              )}
+            </div>
             <p className="text-xs text-gray-500 italic">
-              * Khóa API được lưu độc quyền vào <code>secrets.env</code> trong thư mục dữ liệu và không bao giờ hiển thị lại trên giao diện.
+              Key chỉ lưu trong <code>secrets.env</code> ở thư mục dữ liệu trên máy bạn, không bao giờ hiển thị lại.
             </p>
-          </div>
+          </form>
         </div>
       </div>
 
@@ -215,14 +289,15 @@ export function SettingsPage() {
       </div>
 
       {/* Save Button */}
-      <div className="flex justify-end">
+      <div className="flex justify-end items-center gap-3">
+        {saveSuccess && <span className="text-xs text-emerald-400">✓ Đã lưu (giữ nguyên sau khi khởi động lại)</span>}
         <button
           onClick={() => updateMutation.mutate()}
           disabled={updateMutation.isPending}
           className="inline-flex items-center gap-2 px-5 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-lg text-sm font-medium transition shadow-sm disabled:opacity-50"
         >
           <Save className="w-4 h-4" />
-          {updateMutation.isPending ? "Đang lưu..." : "Lưu cài đặt"}
+          {updateMutation.isPending ? "Đang lưu..." : "Lưu tham số"}
         </button>
       </div>
     </div>
