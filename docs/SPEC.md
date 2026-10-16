@@ -24,7 +24,7 @@ Một ứng dụng **chạy local trên Windows 11**, mở trên trình duyệt,
 9. Dashboard theo dõi trạng thái toàn bộ.
 
 ### Ngoài phạm vi (KHÔNG làm)
-- Dựng/ghép phim, timeline, render cuối (người dùng làm trong CapCut).
+- Trình chỉnh timeline kéo-thả trong app (việc dựng tự động làm bằng HyperFrames §8b; chỉnh tinh làm trong CapCut hoặc nhờ AI agent sửa file composition).
 - Tự động điều khiển web Muse/Gemini/Nano Banana bằng browser automation.
 - Vượt paywall, đăng nhập, captcha, chống bot của web truyện.
 - Đa người dùng, cloud, đăng nhập tài khoản.
@@ -57,6 +57,7 @@ flowchart LR
   I -- shot sau cùng chuỗi --> G
   I --> J[8. TTS thoại]
   J --> K[9. Xuất gói CapCut]
+  J --> L[9b. Dựng tự động<br/>HyperFrames → MP4]
 ```
 
 | # | Bước | Tự động / Thủ công | Cổng duyệt |
@@ -70,7 +71,8 @@ flowchart LR
 | 6 | Video | thủ công (Muse) | — |
 | 7 | Duyệt take | người dùng | **duyệt take** |
 | 8 | TTS | tự động (API) | nghe thử |
-| 9 | Xuất | tự động | kiểm tra thiếu sót |
+| 9 | Xuất gói CapCut | tự động | kiểm tra thiếu sót |
+| 9b | Dựng tự động (HyperFrames) | tự động | xem bản dựng |
 
 ---
 
@@ -326,6 +328,10 @@ Enum:
 - `status`: `queued | running | waiting_user | succeeded | failed | cancelled`
 - `error_category`: `transient` (mạng, 429, timeout → tự retry backoff) | `invalid_output` (JSON sai → retry có phản hồi lỗi) | `permanent` (file hỏng, cấu hình sai) | `quota` (hết hạn mức → gợi ý chế độ thủ công)
 - Khởi động lại app: job `running` → `queued` (tiếp tục). Job **idempotent** theo `input_hash`: trùng hash + đã `succeeded` → dùng lại output.
+- Retry `transient`: **không** giữ slot khi chờ backoff — đặt `status=queued` + `next_run_at = now + delay` (cột mới); worker chỉ lấy job có `next_run_at <= now`. Hủy trong lúc chờ backoff phải có hiệu lực.
+- Phụ thuộc: job có cha `failed`/`cancelled` → giữ `queued` nhưng set `user_action_required` = "Chờ job <id> được sửa/chạy lại" và phát sự kiện; cha chạy lại thành công → tự xóa thông báo. Cha không tồn tại → `failed/permanent`.
+- Handler có thể là `async def` **hoặc** `def` (việc nặng CPU/IO: Pillow, numpy, ffmpeg). Handler `def` chạy bằng `asyncio.to_thread`; `report_progress`, `log`, phát sự kiện phải **thread-safe** (event bus dùng loop chính + `call_soon_threadsafe`).
+- Payload chỉ chứa ID và tham số kỹ thuật, **không bao giờ** chứa secret.
 - Loại job MVP: `import_url`, `import_local`, `stitch_and_cut`, `analysis_read`, `analysis_plan`, `analysis_shots`, `probe_media`, `extract_last_frame`, `tts_line`, `export_capcut`.
 
 ---
@@ -396,6 +402,35 @@ exports/<chapter>_<yyyyMMdd-HHmm>/
 ```
 - Thời lượng lấy từ ffprobe của take thật, **không** lấy `duration_s` dự kiến.
 - Shot chưa duyệt → chặn xuất (hoặc tùy chọn "xuất bản nháp" có đánh dấu `DRAFT_`).
+
+---
+
+## 8b. Dựng tự động bằng HyperFrames
+
+[HyperFrames](https://github.com/heygen-com/hyperframes) (HeyGen, Apache-2.0): video mô tả bằng **HTML** (clip đặt lên timeline bằng
+`data-start` / `data-duration` / `data-track-index`, hiệu ứng bằng CSS/GSAP), render ra MP4 bằng Chrome headless + FFmpeg.
+Vì composition là HTML thuần, **AI agent (Claude, Gemini, Antigravity) đọc & sửa được** — đây là cách "nhờ AI edit video".
+
+### Luồng
+1. Job `build_composition` sinh `exports/<…>/hyperframes/index.html` từ dữ liệu đã duyệt:
+   | Track | Nội dung | Nguồn |
+   |---|---|---|
+   | 0 | Clip video nối tiếp | take đã duyệt (thời lượng thật từ ffprobe) |
+   | 1 | Thoại | file TTS, `at_s` của `DialogueLine` |
+   | 2 | SFX / nhạc nền (tùy chọn) | thư mục SFX/nhạc người dùng chọn |
+   | 3 | Phụ đề | `DialogueLine` |
+   | 4 | Tên chiêu / chữ tượng thanh | `Shot.titles` — mẫu animation GSAP theo `style` + màu chiêu (`color_primary`) |
+   - Media tham chiếu bằng **đường dẫn tương đối** (copy hoặc hard-link vào thư mục composition).
+   - Mẫu HTML/CSS/GSAP để trong `backend/app/assembly/templates/` (có version), không viết cứng trong code Python.
+2. Xem trước: mở `index.html` trong trình duyệt (route phục vụ tĩnh của app, chỉ trong `data_dir`).
+3. Job `render_composition`: gọi CLI HyperFrames qua `subprocess` (list args, timeout, cwd = thư mục composition) → `final.mp4`; parse tiến độ nếu CLI có in ra.
+4. **Sửa bằng AI agent**: người dùng (hoặc agent có HyperFrames skills) sửa `index.html`. App lưu hash lúc sinh; nếu file đã bị sửa tay thì `build_composition` lần sau **không ghi đè**, tạo thư mục phiên bản mới `hyperframes_v2/` và báo.
+
+### Yêu cầu & rủi ro
+- Node.js 22+ (máy Bin: v24 ✓), FFmpeg trong PATH, Chrome headless do HyperFrames quản lý.
+- README của HyperFrames **không ghi rõ hỗ trợ Windows** → Phase 4 bắt đầu bằng **spike**: render composition 3 clip + 1 title trên Windows. Không chạy được → giữ gói CapCut, HyperFrames chuyển sang chạy trong WSL hoặc để sau.
+- Lệnh CLI chính xác (`npx hyperframes render …`) phải lấy từ tài liệu chính thức lúc làm, không đoán.
+- Gói CapCut (§8) **vẫn giữ** làm đường dự phòng và để chỉnh tinh.
 
 ---
 
@@ -497,7 +532,7 @@ Mã HTTP: 400 dữ liệu sai, 404 không tồn tại, 409 xung đột trạng t
 | **1** | Project/chapter, nhập URL + thư mục, ghép & cắt khung, UI chỉnh khung | xem `docs/tasks/phase-1.md` |
 | **2** | Provider adapter (Gemini + thủ công + giả), 3 lượt phân tích, luật, màn Kịch bản & Bảng shot | viết sau review Phase 1 |
 | **3** | HandoffTask, Hàng chờ, take, duyệt, khung nối, lập lịch chuỗi, stale | viết sau review Phase 2 |
-| **4** | Nhân vật (ảnh chuẩn, giọng), TTS, xuất gói CapCut | |
+| **4** | Nhân vật (ảnh chuẩn, giọng), TTS, xuất gói CapCut, **dựng tự động HyperFrames** (bắt đầu bằng spike Windows) | |
 | **5** | Thư mục theo dõi, AI gom khung, sao lưu, đánh bóng UI | |
 
 File nhiệm vụ của phase sau chỉ được viết **sau khi** phase trước được review, để điều chỉnh theo thực tế.
@@ -509,3 +544,4 @@ File nhiệm vụ của phase sau chỉ được viết **sau khi** phase trư�
 2. TTS: Gemini TTS (cùng API key) hay edge-tts? Cần nghe thử giọng Việt trước Phase 4.
 3. Web truyện chính dùng để nhập: cần 1–2 URL mẫu để viết `SiteProfile` (Phase 1).
 4. Khung hình xuất: 16:9 (YouTube) hay 9:16 (TikTok)? Ảnh hưởng prompt keyframe (Phase 2).
+5. HyperFrames có render ổn trên Windows 11 không? (spike đầu Phase 4)
