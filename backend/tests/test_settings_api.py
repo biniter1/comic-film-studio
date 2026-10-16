@@ -35,7 +35,9 @@ def test_gemini_key_save_hint_and_delete(c):
     out = c.put("/api/settings/gemini-key", json={"api_key": f"  {key}  "}).json()
     assert out["gemini_configured"] is True and out["gemini_key_hint"] == "…1234"
     assert key not in json.dumps(out)  # never echo the key
-    assert f"GEMINI_API_KEY={key}" in (settings.data_dir / "secrets.env").read_text(encoding="utf-8")
+    assert f"GEMINI_API_KEY={key}" in (settings.data_dir / "secrets.env").read_text(
+        encoding="utf-8"
+    )
     out = c.delete("/api/settings/gemini-key").json()
     assert out["gemini_configured"] is False
 
