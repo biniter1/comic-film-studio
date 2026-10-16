@@ -358,7 +358,7 @@ class JobRunner:
                     s.refresh(j)
                     self._emit_event(j)
 
-        from app.jobs.registry import JobContext
+        from app.jobs.registry import JobContext, current_job_ctx
 
         ctx = JobContext(
             job_id=job.id,
@@ -367,6 +367,7 @@ class JobRunner:
             progress_callback=progress_callback,
             cancel_check=lambda: self.is_cancelled(job_id),
         )
+        token = current_job_ctx.set(ctx)
 
         handler = get_handler(job.type)
         if not handler:
@@ -465,6 +466,7 @@ class JobRunner:
                     self._emit_event(j)
 
         finally:
+            current_job_ctx.reset(token)
             self._cancel_flags.pop(job_id, None)
 
     def _emit_event(self, job: Job) -> None:

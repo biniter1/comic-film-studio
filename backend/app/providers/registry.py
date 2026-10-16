@@ -12,6 +12,16 @@ def _default() -> AnalysisProvider:
         from app.providers.fake import FakeProvider, e2e_responder
 
         return FakeProvider(e2e_responder)
+
+    if settings.analysis_provider == "openai_compat":
+        from app.providers.openai_compat import OpenAICompatProvider
+
+        return OpenAICompatProvider(
+            base_url=settings.openai_base_url,
+            api_key=settings.openai_compat_api_key,
+            auth_header=settings.openai_auth_header,
+        )
+
     from app.providers.gemini import GeminiProvider
 
     return GeminiProvider(settings.gemini_api_key)
