@@ -28,7 +28,11 @@ from app.storage import asset_abs_path, chapter_dir, project_dir, to_relative
 
 Progress = Callable[[float, str | None], None]
 CHAPTER_JOB_TYPES = (
-    "import_local", "import_url", "stitch_and_cut", "analysis_read", "analysis_dialogue"
+    "import_local",
+    "import_url",
+    "stitch_and_cut",
+    "analysis_read",
+    "analysis_dialogue",
 )
 
 
