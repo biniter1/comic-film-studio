@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.analysis import router as analysis_router
+from app.api.bible import router as bible_router
 from app.api.events import router as events_router
 from app.api.health import router as health_router
 from app.api.jobs import router as jobs_router
@@ -14,5 +15,6 @@ api_router.include_router(events_router)
 api_router.include_router(settings_router)
 api_router.include_router(studio_router)
 api_router.include_router(analysis_router)
+api_router.include_router(bible_router)
 
 __all__ = ["api_router"]

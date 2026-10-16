@@ -37,6 +37,7 @@ def e2e_responder(req: ProviderRequest) -> str:
                     "frame_id": fid,
                     "frame_type": "dialogue_only" if only else "scene",
                     "description": "test frame",
+                    "characters": ["lam_phong"] if i % 2 == 0 or not only else [],
                     "texts": [
                         {
                             "line_no": 1,

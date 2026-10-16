@@ -242,6 +242,10 @@ def delete_rule(rid: str) -> dict[str, Any]:
 
 
 # --- characters -----------------------------------------------------------------
+HeightClass = Literal["child", "short", "average", "tall", "giant"]
+LookStatus = Literal["draft", "approved"]
+
+
 class CharacterIn(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     key: Optional[str] = Field(default=None, pattern=r"^[a-z0-9_]+$")
@@ -249,6 +253,10 @@ class CharacterIn(BaseModel):
     gender: Gender = "unknown"
     age_group: Age = "unknown"
     voice_style: Optional[str] = Field(default=None, max_length=200)
+    look_lock: Optional[str] = None
+    height_class: HeightClass = "average"
+    ref_frame_ids: list[str] = []
+    look_status: LookStatus = "draft"
     status: Literal["suggested", "approved", "rejected"] = "approved"
 
 
@@ -259,6 +267,10 @@ class CharacterPatch(BaseModel):
     age_group: Optional[Age] = None
     voice_style: Optional[str] = Field(default=None, max_length=200)
     status: Optional[Literal["suggested", "approved", "rejected"]] = None
+    look_lock: Optional[str] = None
+    height_class: Optional[HeightClass] = None
+    ref_frame_ids: Optional[list[str]] = None
+    look_status: Optional[LookStatus] = None
 
 
 @router.get("/projects/{pid}/characters")

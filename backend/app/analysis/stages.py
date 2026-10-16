@@ -25,7 +25,7 @@ from app.analysis.schemas import DialogueOut, ReadBatchOut
 from app.config import settings
 from app.errors import AppError
 from app.jobs.event_bus import event_bus
-from app.models.analysis import AddressRule, AnalysisRun, Character, DialogueLine
+from app.models.analysis import AddressRule, AnalysisRun, Character, CharacterOutfit, DialogueLine
 from app.models.project import Asset, Chapter, Frame
 from app.providers.base import ImagePart, ProviderRequest
 from app.storage import asset_abs_path, chapter_dir
@@ -240,15 +240,26 @@ def apply_read_unit(
         for nc in out.new_characters:
             if nc.key in known:
                 continue
+            char = Character(
+                project_id=ch.project_id,
+                key=nc.key,
+                name=nc.name,
+                aliases=nc.aliases,
+                gender=nc.gender,
+                age_group=nc.age_group,
+                voice_style=nc.voice_style,
+            )
+            s.add(char)
+            s.flush()
             s.add(
-                Character(
-                    project_id=ch.project_id,
-                    key=nc.key,
-                    name=nc.name,
-                    aliases=nc.aliases,
-                    gender=nc.gender,
-                    age_group=nc.age_group,
-                    voice_style=nc.voice_style,
+                CharacterOutfit(
+                    character_id=char.id,
+                    key="default",
+                    name_vi="Mặc định",
+                    outfit_lock="",
+                    short_id="",
+                    is_default=True,
+                    sheet_status="missing",
                 )
             )
             known.add(nc.key)

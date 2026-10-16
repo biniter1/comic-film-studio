@@ -599,7 +599,13 @@ Vì composition là HTML thuần, **AI agent (Claude, Gemini, Antigravity) đọ
 | GET/POST | `/projects/{pid}/glossary` · `/address-rules` · `/characters` | Thư viện dự án |
 | PATCH/DELETE | `/glossary/{id}` · `/address-rules/{id}` · `/characters/{id}` | Sửa / duyệt (`status`) / xóa |
 | POST | `/glossary/{id}/merge` · `/characters/{id}/merge` | `{into_id}` — gộp biến thể / gộp nhân vật trùng (chuyển câu thoại + xưng hô) |
-| GET/PUT | `/projects/{pid}/bible` | Story Bible |
+| GET | `/characters/{id}/frame-suggestions` | Gợi ý khung tham chiếu nhân vật (từ `Frame.reading["characters"]`) |
+| GET/POST | `/characters/{id}/outfits` · PATCH/DELETE `/outfits/{oid}` | Trang phục nhân vật (giữ ≥ 1 trang phục mặc định) |
+| GET/POST | `/projects/{pid}/locations` · PATCH/DELETE `/locations/{lid}` | Bối cảnh dự án |
+| GET | `/{target}/{id}/sheet-bundle` | Tải gói zip tạo sheet (khung tham chiếu + prompt + hướng dẫn; `target`: `outfits` \| `locations`) |
+| POST | `/{target}/{id}/sheet` | Tải lên ảnh sheet (multipart, tạo asset `pending`) |
+| POST | `/{target}/{id}/sheet/approve` · `/reject` | Duyệt / từ chối sheet |
+| GET | `/projects/{pid}/bible` | Story Bible (nhân vật kèm trang phục + bối cảnh) |
 | GET | `/chapters/{cid}/shots` | Shot list + scene + chain |
 | PATCH | `/shots/{sid}` | Sửa shot (prompt, thời lượng, transition…) → chạy lại luật §4.3 |
 | POST | `/chapters/{cid}/shots/approve-plan` | Duyệt kế hoạch → sinh HandoffTask |

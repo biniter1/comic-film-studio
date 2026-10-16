@@ -11,7 +11,14 @@ from app.analysis import stages
 from app.analysis.glossary import apply_glossary, approved_terms, norm
 from app.errors import AppError
 from app.jobs.event_bus import event_bus
-from app.models.analysis import AddressRule, AnalysisRun, Character, DialogueLine, GlossaryTerm
+from app.models.analysis import (
+    AddressRule,
+    AnalysisRun,
+    Character,
+    CharacterOutfit,
+    DialogueLine,
+    GlossaryTerm,
+)
 from app.models.project import Chapter, Frame, Project
 from app.services.studio import _assert_chapter_idle, active_chapter_job
 
@@ -489,9 +496,24 @@ def create_character(pid: str, data: dict[str, Any]) -> dict[str, Any]:
             gender=data.get("gender") or "unknown",
             age_group=data.get("age_group") or "unknown",
             voice_style=data.get("voice_style"),
+            look_lock=data.get("look_lock"),
+            height_class=data.get("height_class") or "average",
+            ref_frame_ids=data.get("ref_frame_ids") or [],
+            look_status=data.get("look_status") or "draft",
             status=data.get("status") or "approved",
         )
         s.add(c)
+        s.flush()
+        default_outfit = CharacterOutfit(
+            character_id=c.id,
+            key="default",
+            name_vi="Mặc định",
+            outfit_lock="",
+            short_id="",
+            is_default=True,
+            sheet_status="missing",
+        )
+        s.add(default_outfit)
         s.commit()
         s.refresh(c)
         return c.model_dump(mode="json")
@@ -502,11 +524,22 @@ def update_character(chid: str, data: dict[str, Any]) -> dict[str, Any]:
         c = s.get(Character, chid)
         if not c:
             raise AppError("CHARACTER_NOT_FOUND", "Không tìm thấy nhân vật", status_code=404)
-        for k in ("name", "gender", "age_group", "voice_style", "status"):
+        for k in (
+            "name",
+            "gender",
+            "age_group",
+            "voice_style",
+            "status",
+            "look_lock",
+            "height_class",
+            "look_status",
+        ):
             if k in data and data[k] is not None:
-                setattr(c, k, data[k].strip() if k == "name" else data[k])
+                setattr(c, k, data[k].strip() if isinstance(data[k], str) else data[k])
         if data.get("aliases") is not None:
             c.aliases = [a.strip() for a in data["aliases"] if a.strip()]
+        if data.get("ref_frame_ids") is not None:
+            c.ref_frame_ids = list(data["ref_frame_ids"])
         s.add(c)
         s.commit()
         s.refresh(c)
@@ -536,6 +569,9 @@ def delete_character(chid: str) -> dict[str, Any]:
             d.speaker_key = None
             d.speaker_label = d.speaker_label or c.name
             s.add(d)
+        for o in s.exec(select(CharacterOutfit).where(CharacterOutfit.character_id == c.id)).all():
+            s.delete(o)
+        s.flush()
         s.delete(c)
         s.commit()
     return {"deleted": chid}
@@ -565,6 +601,25 @@ def merge_character(chid: str, into_id: str) -> dict[str, Any]:
         if dst.age_group == "unknown":
             dst.age_group = src.age_group
         s.add(dst)
+
+        # Reassign or delete outfits belonging to src
+        src_outfits = s.exec(
+            select(CharacterOutfit).where(CharacterOutfit.character_id == src.id)
+        ).all()
+        dst_outfit_keys = {
+            o.key
+            for o in s.exec(
+                select(CharacterOutfit).where(CharacterOutfit.character_id == dst.id)
+            ).all()
+        }
+        for o in src_outfits:
+            if o.key in dst_outfit_keys:
+                s.delete(o)
+            else:
+                o.character_id = dst.id
+                s.add(o)
+
+        s.flush()
         s.delete(src)
         s.commit()
         s.refresh(dst)
