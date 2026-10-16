@@ -117,10 +117,12 @@ jobs/runner  →  services
 | `Chapter` | id, project_id, title, source_url, status | |
 | `SourcePage` | id, chapter_id, idx, asset_id, sha256, width, height, status(`ok`/`bad`) | Thứ tự đọc |
 | `Frame` | id, chapter_id, idx, asset_id, y0, y1, x0, x1, origin(`auto`/`manual`) | Tọa độ trên dải ghép |
-| `Character` | id, project_id, key, name, look_lock, voice_id, ref_asset_ids | Tái dùng qua các chapter |
+| `Character` | id, project_id, key, name, aliases, gender, age_group, look_lock, height_class, ref_frame_ids, voice_id | Tái dùng qua các chapter (§5.2) |
+| `CharacterOutfit` | id, character_id, key, outfit_lock, short_id, is_default, sheet_asset_id, sheet_status | Trang phục + character sheet (§4.6) |
+| `Location` | id, project_id, key, name_vi, location_lock, ref_frame_ids, sheet_asset_id, sheet_status | Bối cảnh lặp lại (§4.6) |
 | `Technique` | id, project_id, key, name, vfx_lock, color_primary, color_secondary | Tái dùng qua các chapter |
 | `AnalysisRun` | id, chapter_id, stage(`read`/`plan`/`shots`), mode(`api`/`manual`), provider, model, input_hash, status, raw_output_path, error | Lưu output gốc của AI |
-| `Scene` | id, chapter_id, code(`SC01`), order, summary, frame_ids, music_mood | |
+| `Scene` | id, chapter_id, code(`SC01`), order, summary, frame_ids, location_key, music_mood | |
 | `Chain` | id, chapter_id, code(`C01`), scene_id | Nhóm shot nối liền |
 | `Shot` | xem §5.3 | |
 | `DialogueLine` | id, shot_id, order, kind, speaker_key, text, at_s, tts_asset_id | |
@@ -174,7 +176,7 @@ ready_tasks(chapter):
 
 ### 3.5 Khung nối (boundary frame) cho shot `continuous`
 1. Take của shot N được duyệt → job `extract_last_frame` (ffmpeg) → asset `boundary_raw`.
-2. Tạo `HandoffTask(kind=boundary_fix)` cho shot N+1: gợi ý dùng Nano Banana **sửa mặt/trang phục** theo ảnh chuẩn nhân vật (đính kèm `boundary_raw` + `ref_asset_ids`).
+2. Tạo `HandoffTask(kind=boundary_fix)` cho shot N+1: gợi ý dùng Nano Banana **sửa mặt/trang phục** theo **character sheet** của các nhân vật trong shot (đính kèm `boundary_raw` + các sheet, §4.6).
 3. Người dùng: (a) thả ảnh đã sửa → `boundary_fixed`, hoặc (b) bấm **"Dùng khung gốc"** (không sửa).
 4. Duyệt → shot N+1 `start_ready`.
 > Mục đích: Muse hay trôi mặt; sửa ở mỗi mắt xích để lỗi không cộng dồn và **không để khung lỗi lan xuống chuỗi**.
@@ -206,6 +208,11 @@ Port từ prototype `docs/reference/prototype/rules.py`:
 4. `continuous` chỉ hợp lệ khi cùng chain và cùng scene với shot trước; vi phạm → đổi thành `cut` + ghi chú.
 5. Thời lượng shot ≥ thời gian đọc thoại (~14 ký tự/giây) — vượt `settings.muse_clip_seconds` thì cảnh báo "nên tách shot".
 6. Ghi mọi chỉnh sửa vào `analysis/rule_notes.json` để hiển thị trên UI.
+7. **Máy quay**: mỗi shot đúng **một** `camera.movement` (kể cả `static`); các nhịp không được đổi cỡ cảnh/góc máy mâu thuẫn (vd vừa `aerial` vừa `extreme_close_up`). Vi phạm → giữ chuyển động của nhịp đầu, ghi chú.
+8. **Nhịp (beats)** phủ kín `[0, duration_s]`, không chồng nhau; shot ≤ 5s có tối đa 3 nhịp. Thiếu → kéo nhịp cuối; thừa → gộp + ghi chú.
+9. **Nhân vật trong `blocking`** phải có `look_lock` đã duyệt và trang phục (`outfit_key`) tồn tại; nhân vật không thấy trong khung nguồn (theo `FrameReading.characters`) → cờ "AI tự thêm nhân vật".
+10. **Trục 180°**: trong một scene, nếu cùng hai nhân vật mà vị trí trái/phải bị đảo giữa hai shot liên tiếp (không phải `continuous` có nhịp "đi vòng") → cảnh báo "lật trục". Shot `continuous` phải giữ `screen_pos`/`facing` của `end_state` shot trước ở nhịp đầu.
+11. **Prompt do code ghép** (§4.6) — AI không viết prompt tự do; người dùng sửa tay → `prompt_override` + cờ "đã sửa tay" (chạy lại `shots` không ghi đè).
 
 ### 4.5 Kịch bản thoại & thư viện thuật ngữ (Phase 2a)
 
@@ -253,6 +260,38 @@ Thời lượng hiển thị câu (chế độ `subtitles`): `max(1.2s, ký tự
 
 ### 4.4 Đặc thù Muse (chỉ ảnh đầu)
 `video_prompt` phải mô tả rõ **trạng thái kết thúc** (`end_state`) — vì không ép được khung cuối, đây là cách duy nhất để shot sau dự đoán được. Khuyến nghị clip ngắn (3–5s) để giảm trôi mặt.
+
+### 4.6 Ba lớp khóa nhất quán (bảng nhân vật · storyboard · prompt) — Phase 2b/2c
+Ý tưởng lấy từ quy trình node của LibTV, điều chỉnh cho ràng buộc của mình: **Muse chỉ nhận ảnh đầu** → mọi thứ về *ngoại hình* phải khóa xong ở **keyframe (Nano Banana, nhận nhiều ảnh tham chiếu)**; prompt Muse chỉ lo *chuyển động*.
+
+| Lớp | Khóa cái gì | Dữ liệu | Dùng ở đâu |
+|---|---|---|---|
+| **1. Bảng nhân vật / bối cảnh** | Ngoại hình, trang phục, tỷ lệ; kiến trúc, màu, ánh sáng của địa điểm lặp lại | `Character.look_lock` + `CharacterOutfit` (+ ảnh **character sheet** đã duyệt), `Location` (+ ảnh **location sheet**) — §5.2 | Đính kèm + chèn text vào **mọi task keyframe / khung nối** |
+| **2. Storyboard của shot** | Ngôn ngữ máy quay & logic không gian | Khung truyện nguồn (= storyboard tác giả vẽ sẵn) + `camera`, `blocking` (ai ở trái/phải, xa/gần, nhìn hướng nào), `beats` (0–2s, 2–4s…), `start_state`/`end_state` — §5.3 | Màn **Bảng shot** (thẻ storyboard), luật 7–10 §4.3 |
+| **3. Prompt** | Hành động & chuyển động máy | **Ghép bằng code** từ lớp 1 + 2 theo khuôn cố định | `keyframe_prompt` (Nano Banana), `video_prompt` (Muse) |
+
+**Khuôn `keyframe_prompt`** (Nano Banana; ảnh đính kèm được đánh số trong prompt):
+```
+Image 1 is the comic panel: copy its composition, poses and camera angle.
+Image 2 is the character sheet of {A}; Image 3 … of {B}; Image N is the location sheet of {L}.
+{style_lock}. {shot_size}, {angle} shot.
+Location: {location_lock}.
+{A.name}: {A.look_lock}, wearing {outfit_lock}, {screen_pos} {depth}, facing {facing}, {pose}.   (mỗi nhân vật 1 dòng)
+Moment: {start_state}.
+Keep faces, hairstyles and outfits exactly as in the sheets. {negative}
+```
+**Khuôn `video_prompt`** (Muse; ảnh đầu đã chứa ngoại hình nên chỉ gọi tên ngắn + 3–6 từ nhận diện):
+```
+{camera.movement} {camera.speed}, {shot_size}.            ← đúng 1 chuyển động
+First, {beat1.action}. Then, {beat2.action}. Finally, {beat3.action}.
+Ends on: {end_state}.
+{A.short_id} keeps the same face and outfit throughout. No new characters, no text, no cuts.
+```
+- `short_id` = mô tả nhận diện ngắn (vd "the young man in the black robe") — lấy từ `CharacterOutfit.short_id`.
+- Giới hạn `video_prompt` ≤ 90 từ (Muse bỏ qua phần đuôi prompt dài). Vượt → cảnh báo, rút gọn phần nhận diện trước.
+- Nhiều nhân vật cùng hành động: viết theo thứ tự thời gian, mỗi nhịp một chủ thể chính.
+
+**Cổng sheet**: task keyframe/khung nối của shot có nhân vật **chưa có sheet đã duyệt** ở trạng thái `blocked` (lý do: "Thiếu bảng nhân vật X"), người dùng có thể bấm **"Làm không cần sheet"** cho từng task.
 
 ---
 
@@ -305,6 +344,12 @@ Bổ sung (Phase 2a): `frame_type` (§4.5); mỗi phần tử `texts[]` thêm `l
 ```
 
 ### 5.2 Story Bible (project-level)
+> Từ Phase 2b, nhân vật & bối cảnh là **bảng trong DB** (nguồn chính); `bible.json` chỉ là bản xuất. Trường mới cho lớp khóa 1 (§4.6):
+>
+> - `Character`: `look_lock` (EN, ≤ 60 từ — **chỉ đặc điểm cố định**: khuôn mặt, tóc, mắt, vóc dáng, nước da, dấu hiệu đặc biệt; *không* có quần áo), `height_class` (`child|short|average|tall|giant`), `ref_frame_ids` (2–4 khung rõ nhân vật nhất, AI gợi ý từ `read`, người dùng chọn), `look_status` (`draft|approved`).
+> - `CharacterOutfit` (mới): `id, character_id, key, name_vi, outfit_lock` (EN — quần áo, phụ kiện, vũ khí), `short_id` (EN 3–6 từ), `is_default`, `sheet_asset_id`, `sheet_status` (`missing|pending|approved`), `note` (vd "từ chương 120, sau khi bị thương"). Mỗi nhân vật ≥ 1 trang phục mặc định.
+> - `Location` (mới): `id, project_id, key, name_vi, aliases, location_lock` (EN — kiến trúc, vật liệu, bảng màu, ánh sáng, thời điểm), `ref_frame_ids`, `sheet_asset_id`, `sheet_status`. `Scene.location_key` trỏ tới đây.
+> - Asset mới: `char_sheet` (1 ảnh/trang phục: chính diện, 3/4, nghiêng, sau lưng + cận mặt, nền trơn), `location_sheet` (toàn cảnh + góc ngược lại).
 ```json
 {
   "schema_version": 1,
@@ -337,7 +382,18 @@ Bổ sung (Phase 2a): `frame_type` (§4.5); mỗi phần tử `texts[]` thêm `l
   "frame_ids": ["F012", "F013"],
   "phase": "release",
   "duration_s": 4.0,
-  "camera": {"shot_size": "extreme_close_up", "movement": "push_in", "angle": "low"},
+  "camera": {"shot_size": "extreme_close_up", "movement": "push_in", "speed": "slow", "angle": "low"},
+  "location_key": "thanh_van_dai_dien",
+  "blocking": [
+    {"character_key": "hero", "outfit_key": "hero_black_robe", "screen_pos": "center",
+     "depth": "fg", "facing": "camera", "pose": "eyes closed, two fingers raised at chest"}
+  ],
+  "beats": [
+    {"t0": 0.0, "t1": 1.5, "action": "the forehead mark starts to glow faintly"},
+    {"t0": 1.5, "t1": 3.0, "action": "his eyes snap open, glow intensifies"},
+    {"t0": 3.0, "t1": 4.0, "action": "light floods the frame"}
+  ],
+  "prompt_override": {"keyframe": null, "video": null},
   "action": "The mark flares and light floods the screen",
   "emotion": "power unleashed",
   "start_state": "close-up face, mark glowing, eyes closed",
@@ -357,6 +413,10 @@ Enum:
 - `phase`: `establish | dialogue | reaction | anticipation | charge | release | travel | impact | aftermath | transition`
 - `state`: `planned | needs_keyframe | waiting_prev | needs_boundary | start_ready | in_production | review | approved`
 - `titles[].style`: `technique | sfx | system`
+- `camera.shot_size`: `extreme_wide | wide | full | medium | medium_close_up | close_up | extreme_close_up | insert`
+- `camera.movement` (đúng 1): `static | push_in | pull_out | pan_left | pan_right | tilt_up | tilt_down | truck_left | truck_right | orbit_left | orbit_right | follow | crane_up | crane_down | handheld_shake | crash_zoom`
+- `camera.speed`: `slow | medium | fast`; `camera.angle`: `eye | low | high | overhead | dutch`
+- `blocking[].screen_pos`: `left | center | right`; `depth`: `fg | mg | bg`; `facing`: `left | right | camera | away`
 - `dialogue[].kind`: `dialogue | inner_thought | narration | technique_shout`
 
 ### 5.4 `Asset`
@@ -369,7 +429,7 @@ Enum:
   "media": {"width": 1280, "height": 720, "duration_s": 5.0, "fps": 24, "has_audio": true}
 }
 ```
-`kind`: `page | page_preview | frame | ref | keyframe | boundary_raw | boundary_fixed | take | tts | export`.
+`kind`: `page | page_preview | frame | ref | char_sheet | location_sheet | keyframe | boundary_raw | boundary_fixed | take | tts | export`.
 `approval`: `pending | approved | rejected`. **Không bao giờ tự xóa** asset đã duyệt hay take cũ.
 
 ### 5.5 `HandoffTask` (việc thủ công trên dịch vụ ngoài)
@@ -385,7 +445,8 @@ Enum:
   "opened_at": null, "completed_at": null
 }
 ```
-- `kind`: `keyframe` (Nano Banana) | `boundary_fix` (Nano Banana) | `video` (Muse) | `analysis_manual` (Gemini app)
+- `kind`: `char_sheet` · `location_sheet` (Nano Banana) | `keyframe` (Nano Banana) | `boundary_fix` (Nano Banana) | `video` (Muse) | `analysis_manual` (Gemini app)
+- `attach_asset_ids` của `keyframe`/`boundary_fix`: theo thứ tự được đánh số trong prompt — khung truyện nguồn, sheet trang phục của từng nhân vật trong `blocking`, location sheet (§4.6).
 - `status`: `blocked | ready | in_progress | submitted | done | cancelled`
 - Chỉ chuyển `submitted` khi **file kết quả đã được thả vào, kiểm tra hợp lệ và lưu** — không bao giờ coi "đã copy prompt" là xong.
 
@@ -442,7 +503,9 @@ Bố cục chung: **thanh bên trái** (Dự án → Chapter → các bước), 
 | **Dự án** | Danh sách project/chapter, tiến độ | Thẻ chapter: % shot đã duyệt, dung lượng |
 | **Nhập chapter** | URL/thư mục → lưới trang | Ô URL, vùng thả ảnh, lưới thumbnail kéo đổi thứ tự, cảnh báo trùng/hỏng |
 | **Khung** | Duyệt cắt khung | Dải dọc + đường cắt, gộp/tách, nút "Duyệt khung" |
-| **Kịch bản** | Story Bible + scene + shot list | Tab Nhân vật / Chiêu thức / Scene; bảng shot chỉnh được; hiển thị `rule_notes` |
+| **Kịch bản** | Kịch bản thoại (2a) + scene + shot list | Bảng shot chỉnh được; hiển thị `rule_notes` |
+| **Nhân vật & bối cảnh** (2b) | Lớp khóa 1 | Thẻ nhân vật: khung tham chiếu, `look_lock`, các trang phục + **sheet** (tạo gói Nano Banana / thả ảnh / duyệt); thẻ bối cảnh tương tự; tab Thuật ngữ / Xưng hô giữ nguyên |
+| **Storyboard** (2c, trong Bảng shot) | Lớp khóa 2 + 3 | Mỗi shot 1 thẻ: khung truyện nguồn, chip vị trí L/C/R + mũi tên hướng nhìn, thanh nhịp thời gian, biểu tượng chuyển động máy, **xem trước 2 prompt** (sửa được), cảnh báo luật |
 | **Bảng shot** | Nhìn toàn cục theo chuỗi | **Mỗi chuỗi một hàng (lane)**, thẻ shot theo thứ tự, màu theo trạng thái, mũi tên `continuous` |
 | **Hàng chờ** ⭐ | Nơi làm việc chính | Danh sách task `ready` (song song), mỗi thẻ: ảnh cần tải lên (nút tải/kéo ra), prompt + nút Copy, hướng dẫn, **vùng thả kết quả** |
 | **Chi tiết shot** | So sánh take, duyệt | Ảnh đầu, các take (video), so khung cuối, Duyệt/Từ chối, ghi chú |
@@ -578,7 +641,8 @@ Mã HTTP: 400 dữ liệu sai, 404 không tồn tại, 409 xung đột trạng t
       takes/<SHOT>/      take_01.mp4 take_02.mp4 …
       tts/<SHOT>/        L1_v1.wav …
       exports/…
-    refs/<character_key>/  ref_01.png …
+    refs/<character_key>/<outfit_key>/  sheet_v1.png …
+    locations/<location_key>/           sheet_v1.png …
   jobs/<job_id>.log
   tmp/                              xóa an toàn khi khởi động (chỉ file > 24h)
 ```
@@ -616,7 +680,8 @@ Mã HTTP: 400 dữ liệu sai, 404 không tồn tại, 409 xung đột trạng t
 | **0** | Khung repo, backend/frontend chạy, DB + migration, job runner + SSE, CI | xem `docs/tasks/phase-0.md` |
 | **1** | Project/chapter, nhập URL + thư mục, ghép & cắt khung, UI chỉnh khung | xem `docs/tasks/phase-1.md` |
 | **2a** | Provider adapter (Gemini + thủ công + giả), lượt `read` (loại khung, bóc thoại, người nói), lượt `dialogue` (biên tập + thuật ngữ + xưng hô), màn **Kịch bản thoại** & **Thuật ngữ** | xem `docs/tasks/phase-2a.md` |
-| **2b** | Lượt `plan` + `shots`, luật §4.3, shot phản ứng, màn Bảng shot | viết sau review 2a |
+| **2b** | **Nhân vật & bối cảnh** (lớp khóa 1, §4.6): `look_lock`, trang phục, `Location`, gói tạo **character/location sheet** bằng Nano Banana (thủ công), duyệt sheet | xem `docs/tasks/phase-2b.md` (bắt đầu sau thí nghiệm `docs/experiments/consistency-sheet-test.md`) |
+| **2c** | Lượt `plan` + `shots` với **storyboard** (camera, blocking, beats), **ghép prompt bằng code**, luật §4.3 (1–11), shot phản ứng, màn Bảng shot/Storyboard | viết sau review 2b |
 | **3** | HandoffTask, Hàng chờ, take, duyệt, khung nối, lập lịch chuỗi, stale | viết sau review Phase 2 |
 | **4** | Nhân vật (ảnh chuẩn, giọng), TTS, xuất gói CapCut, **dựng tự động HyperFrames** (bắt đầu bằng spike Windows) | |
 | **5** | Thư mục theo dõi, AI gom khung, sao lưu, đánh bóng UI | |
@@ -629,5 +694,6 @@ File nhiệm vụ của phase sau chỉ được viết **sau khi** phase trư�
 1. Muse: độ dài clip/tỷ lệ khung cho phép? Có giới hạn số lần tạo/ngày? (ảnh hưởng `muse_clip_seconds`, gợi ý số tab)
 2. TTS: Gemini TTS (cùng API key) hay edge-tts? Cần nghe thử giọng Việt trước Phase 4.
 3. Web truyện chính dùng để nhập: cần 1–2 URL mẫu để viết `SiteProfile` (Phase 1).
-4. Khung hình xuất: 16:9 (YouTube) hay 9:16 (TikTok)? Ảnh hưởng prompt keyframe (Phase 2b).
+4. Khung hình xuất: 16:9 (YouTube) hay 9:16 (TikTok)? Ảnh hưởng prompt keyframe (Phase 2c) — và **sheet nên làm nền trơn tỷ lệ 16:9** bất kể khung xuất.
+6. Nano Banana: tối đa bao nhiêu ảnh tham chiếu/lượt trên app? (giới hạn số nhân vật + bối cảnh đính kèm cho 1 keyframe) — kiểm tra trong thí nghiệm sheet.
 5. HyperFrames có render ổn trên Windows 11 không? (spike đầu Phase 4)
