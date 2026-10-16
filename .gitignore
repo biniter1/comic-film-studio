@@ -2,17 +2,22 @@
 data/
 *.db
 *.db-*
+*.sqlite
 .env
 secrets.env
+ComicFilmStudio/
+
 # python
 __pycache__/
 *.pyc
 .venv/
 .pytest_cache/
 .ruff_cache/
+
 # node
 node_modules/
 frontend/dist/
+
 # os/editor
 .DS_Store
 Thumbs.db
