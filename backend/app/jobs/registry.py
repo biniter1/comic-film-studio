@@ -1,3 +1,4 @@
+import inspect
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,6 +19,8 @@ class JobError(Exception):
 
 
 class JobContext:
+    """Passed to every job handler — safe to call from sync or async code."""
+
     def __init__(
         self,
         job_id: str,
@@ -52,8 +55,25 @@ class JobContext:
         return self._cancel_check()
 
 
-JobHandlerFunc = Callable[[JobContext], Awaitable[None]]
+# Handler may be either `async def` (non-blocking) or `def` (CPU/IO-heavy).
+# Runner detects via inspect.iscoroutinefunction and dispatches accordingly.
+SyncHandlerFunc = Callable[[JobContext], None]
+AsyncHandlerFunc = Callable[[JobContext], Awaitable[None]]
+JobHandlerFunc = SyncHandlerFunc | AsyncHandlerFunc
+
 _JOB_HANDLERS: dict[str, JobHandlerFunc] = {}
+
+_SECRET_KEYS = {"key", "token", "secret", "password"}
+
+
+def _check_payload(payload: dict[str, Any]) -> None:
+    """Raise ValueError if payload contains secret-like keys (per SPEC §5.6)."""
+    for k in payload:
+        if any(s in k.lower() for s in _SECRET_KEYS):
+            raise ValueError(
+                f"Payload key '{k}' looks like a secret. "
+                "Job payloads must contain only IDs and technical parameters."
+            )
 
 
 def job_handler(job_type: str) -> Callable[[JobHandlerFunc], JobHandlerFunc]:
@@ -66,3 +86,7 @@ def job_handler(job_type: str) -> Callable[[JobHandlerFunc], JobHandlerFunc]:
 
 def get_handler(job_type: str) -> Optional[JobHandlerFunc]:
     return _JOB_HANDLERS.get(job_type)
+
+
+def is_async_handler(fn: JobHandlerFunc) -> bool:
+    return inspect.iscoroutinefunction(fn)

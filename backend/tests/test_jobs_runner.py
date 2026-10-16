@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 from sqlmodel import Session, SQLModel, create_engine, select
 
+from app.jobs.event_bus import event_bus
 from app.jobs.runner import JobRunner, JobService
 from app.models.job import Job
 
@@ -22,6 +23,7 @@ def test_db(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_demo_job_succeeds(test_db):
     engine, data_dir = test_db
+    event_bus.bind_loop(asyncio.get_running_loop())
     service = JobService(engine=engine)
     runner = JobRunner(engine=engine, concurrency=2, data_dir=data_dir, backoff_delays=[0.05, 0.1])
 
@@ -30,7 +32,6 @@ async def test_demo_job_succeeds(test_db):
 
     await runner.start()
 
-    # Wait for completion
     for _ in range(30):
         await asyncio.sleep(0.2)
         with Session(engine) as session:
@@ -48,6 +49,7 @@ async def test_demo_job_succeeds(test_db):
 @pytest.mark.asyncio
 async def test_job_depends_on(test_db):
     engine, data_dir = test_db
+    event_bus.bind_loop(asyncio.get_running_loop())
     service = JobService(engine=engine)
     runner = JobRunner(engine=engine, concurrency=2, data_dir=data_dir, backoff_delays=[0.05, 0.1])
 
@@ -56,14 +58,13 @@ async def test_job_depends_on(test_db):
 
     await runner.start()
 
-    # Wait for child completion
     for _ in range(50):
         await asyncio.sleep(0.2)
         with Session(engine) as session:
             c = session.get(Job, child.id)
             p = session.get(Job, parent.id)
             if c and c.status == "succeeded":
-                assert p.status == "succeeded"
+                assert p is not None and p.status == "succeeded"
                 assert c.started_at >= p.finished_at
                 break
     else:
@@ -74,34 +75,39 @@ async def test_job_depends_on(test_db):
 
 @pytest.mark.asyncio
 async def test_transient_error_retry(test_db):
+    """Transient failures exhaust max_attempts via next_run_at backoff mechanism."""
     engine, data_dir = test_db
+    event_bus.bind_loop(asyncio.get_running_loop())
     service = JobService(engine=engine)
     runner = JobRunner(
         engine=engine,
         concurrency=1,
         data_dir=data_dir,
-        backoff_delays=[0.05, 0.1, 0.15],
+        backoff_delays=[0.05, 0.1, 0.15],  # fast backoffs for test
     )
 
     job = service.enqueue(
         "demo_sleep",
-        payload={"duration_s": 1, "fail": True, "fail_category": "transient"},
+        payload={"duration_s": 0, "fail": True, "fail_category": "transient"},
         max_attempts=3,
     )
 
     await runner.start()
 
     # Wait until all retries exhaust and job fails
-    for _ in range(60):
-        await asyncio.sleep(0.2)
+    # With 3 fast backoffs the whole sequence takes < 5s
+    for _ in range(80):
+        await asyncio.sleep(0.1)
         with Session(engine) as session:
             j = session.get(Job, job.id)
             if j and j.status == "failed":
-                assert j.attempts == 3
+                assert j.attempts == 3, f"expected 3 attempts, got {j.attempts}"
                 assert j.error_category == "transient"
                 break
     else:
-        pytest.fail("Job did not fail after exhausting retries")
+        with Session(engine) as session:
+            j = session.get(Job, job.id)
+        pytest.fail(f"Job did not fail after exhausting retries, status={j.status if j else 'None'}")
 
     await runner.stop()
 
@@ -110,22 +116,18 @@ def test_idempotent_enqueue(test_db):
     engine, _ = test_db
     service = JobService(engine=engine)
 
-    # First enqueue
     job1 = service.enqueue("demo_sleep", payload={"foo": "bar"}, input_hash="hash_abc_123")
     assert job1.status == "queued"
 
-    # Simulate success
     with Session(engine) as session:
         j = session.get(Job, job1.id)
-        j.status = "succeeded"
+        j.status = "succeeded"  # type: ignore[union-attr]
         session.add(j)
         session.commit()
 
-    # Second enqueue with same hash & type
     job2 = service.enqueue("demo_sleep", payload={"foo": "bar"}, input_hash="hash_abc_123")
     assert job2.id == job1.id
 
-    # Verify only 1 record exists in DB
     with Session(engine) as session:
         jobs = session.exec(select(Job).where(Job.input_hash == "hash_abc_123")).all()
         assert len(jobs) == 1
@@ -133,7 +135,6 @@ def test_idempotent_enqueue(test_db):
 
 def test_restart_recovery(test_db):
     engine, data_dir = test_db
-    # Create a job in 'running' state directly in DB
     with Session(engine) as session:
         job = Job(
             id="J_RESTART_TEST",
@@ -145,7 +146,6 @@ def test_restart_recovery(test_db):
         session.add(job)
         session.commit()
 
-    # Instantiate a new runner and call recover_running_jobs
     new_runner = JobRunner(engine=engine, data_dir=data_dir)
     new_runner.recover_running_jobs()
 
@@ -153,5 +153,23 @@ def test_restart_recovery(test_db):
         recovered = session.get(Job, "J_RESTART_TEST")
         assert recovered is not None
         assert recovered.status == "queued"
-        # attempts must be preserved
         assert recovered.attempts == 1
+
+
+def test_enqueue_rejects_secret_payload(test_db):
+    """Payload with secret-like keys must raise ValueError (SPEC §5.6 / review answer)."""
+    engine, _ = test_db
+    service = JobService(engine=engine)
+
+    with pytest.raises(ValueError, match="secret"):
+        service.enqueue("demo_sleep", payload={"api_key": "abc123"})
+
+    with pytest.raises(ValueError, match="secret"):
+        service.enqueue("demo_sleep", payload={"gemini_token": "xyz"})
+
+    with pytest.raises(ValueError, match="secret"):
+        service.enqueue("demo_sleep", payload={"password": "hunter2"})
+
+    # Normal payload must be accepted
+    job = service.enqueue("demo_sleep", payload={"duration_s": 1, "chapter_id": "ch1"})
+    assert job.id is not None

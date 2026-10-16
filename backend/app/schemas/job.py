@@ -19,6 +19,7 @@ class JobRead(BaseModel):
     error_category: Optional[str] = None
     error_message: Optional[str] = None
     user_action_required: Optional[str] = None
+    next_run_at: Optional[datetime] = None
     created_at: datetime
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
