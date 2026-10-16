@@ -9,9 +9,11 @@ from sqlmodel import Session, select
 
 from app import db
 from app.analysis import stages
+from app.analysis.engine import extract_json
 from app.analysis.schemas import Age, FrameType, Gender, TermKind, TextKind
 from app.errors import AppError
 from app.jobs.runner import job_service
+from app.models.analysis import AnalysisRun
 from app.models.job import Job
 from app.schemas.job import JobRead
 from app.services import dialogue as svc
@@ -30,7 +32,7 @@ class AnalysisIn(BaseModel):
 
 
 class PasteIn(BaseModel):
-    unit_index: int = Field(ge=0)
+    unit_index: Optional[int] = Field(default=None, ge=0)
     raw: str = Field(min_length=1, max_length=2_000_000)
 
 
@@ -103,7 +105,126 @@ def manual_bundle(cid: str, stage: Stage, unit: int = 0) -> FileResponse:
 @router.post("/chapters/{cid}/analysis/{stage}/paste")
 def manual_paste(cid: str, stage: Stage, body: PasteIn) -> dict[str, Any]:
     studio.assert_chapter_idle(cid)
-    return stages.manual_paste(_run_id(cid, stage, body.unit_index), body.raw)
+
+    # Attempt to extract JSON from raw
+    try:
+        data = extract_json(body.raw)
+    except Exception as e:
+        if body.unit_index is not None:
+            return stages.manual_paste(_run_id(cid, stage, body.unit_index), body.raw)
+        raise AppError(
+            "INVALID_OUTPUT",
+            "Nội dung dán vào không phải JSON hợp lệ",
+            {"error": str(e)[:2000]},
+            status_code=422,
+        )
+
+    json_targets: list[str] = []
+    if stage == "read":
+        frames = (
+            data.get("frames", [])
+            if isinstance(data, dict)
+            else (data if isinstance(data, list) else [])
+        )
+        json_targets = [
+            f.get("frame_id") for f in frames if isinstance(f, dict) and f.get("frame_id")
+        ]
+    elif stage == "dialogue":
+        lines = (
+            data.get("lines", [])
+            if isinstance(data, dict)
+            else (data if isinstance(data, list) else [])
+        )
+        json_targets = [
+            line_item.get("line_id")
+            for line_item in lines
+            if isinstance(line_item, dict) and line_item.get("line_id")
+        ]
+
+    if body.unit_index is not None and not json_targets:
+        return stages.manual_paste(_run_id(cid, stage, body.unit_index), body.raw)
+
+    target_name = "frame_id" if stage == "read" else "line_id"
+
+    with Session(db.engine) as s:
+        awaiting_runs = s.exec(
+            select(AnalysisRun)
+            .where(
+                AnalysisRun.chapter_id == cid,
+                AnalysisRun.stage == stage,
+                AnalysisRun.status == "awaiting_paste",
+            )
+            .order_by(AnalysisRun.unit_index)
+        ).all()
+        all_runs = s.exec(
+            select(AnalysisRun)
+            .where(
+                AnalysisRun.chapter_id == cid,
+                AnalysisRun.stage == stage,
+            )
+            .order_by(AnalysisRun.unit_index)
+        ).all()
+
+        active_runs = awaiting_runs if awaiting_runs else all_runs
+
+        matched_run: Optional[AnalysisRun] = None
+        set_json = set(json_targets)
+        if set_json:
+            for r in awaiting_runs:
+                unit_targets = set((r.payload or {}).get("targets", []))
+                if set_json == unit_targets:
+                    matched_run = r
+                    break
+            if not matched_run:
+                for r in all_runs:
+                    unit_targets = set((r.payload or {}).get("targets", []))
+                    if set_json == unit_targets:
+                        matched_run = r
+                        break
+
+        if not matched_run:
+            lines_desc = [
+                f"Gói {r.unit_index + 1}: {', '.join(r.payload.get('targets', []))}"
+                for r in active_runs
+                if r.payload and r.payload.get("targets")
+            ]
+            err_msg = (
+                f"Không tìm thấy gói nào khớp với các {target_name} trong JSON vừa dán. "
+                f"Danh sách {target_name} mong đợi của từng gói còn chờ: {'; '.join(lines_desc)}"
+            )
+            if body.unit_index is not None:
+                for r in active_runs:
+                    if r.unit_index == body.unit_index:
+                        r.error = err_msg[:2000]
+                        s.add(r)
+                        s.commit()
+                        break
+            raise AppError(
+                "UNMATCHED_TARGETS",
+                err_msg,
+                {
+                    "error": err_msg,
+                    "stage": stage,
+                    "json_targets": json_targets,
+                    "expected_by_unit": {
+                        str(r.unit_index + 1): r.payload.get("targets", [])
+                        for r in active_runs
+                        if r.payload and r.payload.get("targets")
+                    },
+                },
+                status_code=422,
+            )
+
+        run_id = matched_run.id
+        matched_idx = matched_run.unit_index
+
+    res = stages.manual_paste(run_id, body.raw)
+    res["matched_unit"] = matched_idx
+    if body.unit_index is not None and body.unit_index != matched_idx:
+        res["message_vi"] = f"Kết quả thuộc gói {matched_idx + 1}, đã tự chuyển"
+    else:
+        res["message_vi"] = f"Đã áp dụng kết quả vào gói {matched_idx + 1}"
+    return res
 
 
 # --- dialogue script --------------------------------------------------------

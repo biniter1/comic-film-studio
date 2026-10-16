@@ -1,3 +1,4 @@
+import contextvars
 import inspect
 import re
 from collections.abc import Awaitable, Callable
@@ -54,6 +55,11 @@ class JobContext:
 
     def is_cancelled(self) -> bool:
         return self._cancel_check()
+
+
+current_job_ctx: contextvars.ContextVar[Optional[JobContext]] = contextvars.ContextVar(
+    "current_job_ctx", default=None
+)
 
 
 # Handler may be either `async def` (non-blocking) or `def` (CPU/IO-heavy).

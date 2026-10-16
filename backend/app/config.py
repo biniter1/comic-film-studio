@@ -25,6 +25,12 @@ class Settings(BaseSettings):
     # Phase 2a: model ids live here only (never hard-coded elsewhere)
     analysis_model_vision: str = "gemini-2.5-flash"
     analysis_model_text: str = "gemini-2.5-pro"
+    # OpenAI Compat provider settings
+    analysis_provider: str = "gemini"  # "gemini" | "openai_compat"
+    openai_base_url: str = "https://revidapi.com/v1"
+    openai_auth_header: str = "x-api-key"  # "x-api-key" | "authorization-bearer"
+    openai_reasoning_effort: str = "low"  # "low" | "medium" | "high"
+    openai_compat_api_key: Optional[str] = None
 
     def load_secrets(self) -> None:
         """Read secrets.env from data_dir if present."""
@@ -43,6 +49,10 @@ class Settings(BaseSettings):
                         self.gemini_api_key = val
                     elif key == "CFS_GEMINI_API_KEY" and not self.gemini_api_key:
                         self.gemini_api_key = val
+                    elif key == "OPENAI_COMPAT_API_KEY" and not self.openai_compat_api_key:
+                        self.openai_compat_api_key = val
+                    elif key == "CFS_OPENAI_COMPAT_API_KEY" and not self.openai_compat_api_key:
+                        self.openai_compat_api_key = val
             except Exception:
                 pass
 
@@ -56,6 +66,10 @@ class Settings(BaseSettings):
         "muse_clip_seconds",
         "analysis_model_vision",
         "analysis_model_text",
+        "analysis_provider",
+        "openai_base_url",
+        "openai_auth_header",
+        "openai_reasoning_effort",
     )
 
     def load_overrides(self) -> None:
@@ -80,11 +94,23 @@ class Settings(BaseSettings):
         )
         tmp.replace(f)
 
-    def save_gemini_key(self, key: Optional[str]) -> None:
-        self.gemini_api_key = key or None
+    def _write_secrets(self) -> None:
         f = self.data_dir / "secrets.env"
         f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(f"GEMINI_API_KEY={key or ''}\n", encoding="utf-8")
+        lines = []
+        if self.gemini_api_key:
+            lines.append(f"GEMINI_API_KEY={self.gemini_api_key}")
+        if self.openai_compat_api_key:
+            lines.append(f"OPENAI_COMPAT_API_KEY={self.openai_compat_api_key}")
+        f.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+
+    def save_gemini_key(self, key: Optional[str]) -> None:
+        self.gemini_api_key = key or None
+        self._write_secrets()
+
+    def save_openai_key(self, key: Optional[str]) -> None:
+        self.openai_compat_api_key = key or None
+        self._write_secrets()
 
 
 settings = Settings()

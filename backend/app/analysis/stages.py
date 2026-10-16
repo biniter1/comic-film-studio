@@ -24,13 +24,14 @@ from app.analysis.glossary import (
 from app.analysis.schemas import DialogueOut, ReadBatchOut
 from app.config import settings
 from app.errors import AppError
+from app.frames.images import _jpeg_bytes
 from app.jobs.event_bus import event_bus
 from app.models.analysis import AddressRule, AnalysisRun, Character, CharacterOutfit, DialogueLine
 from app.models.project import Asset, Chapter, Frame
 from app.providers.base import ImagePart, ProviderRequest
 from app.storage import asset_abs_path, chapter_dir
 
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2"
 READ_BATCH = 6
 DIALOGUE_CHUNK = 150
 DIALOGUE_CONTEXT = 10
@@ -575,12 +576,15 @@ def list_units(cid: str, stage: str) -> list[dict[str, Any]]:
         ]
 
 
-MANUAL_README = """HƯỚNG DẪN (chế độ thủ công)
-1. Mở https://gemini.google.com (chọn model mạnh nhất bạn có).
-2. Đính kèm TẤT CẢ ảnh trong thư mục images/ theo đúng thứ tự tên file (nếu có).
-3. Mở prompt.txt, copy toàn bộ, dán vào ô chat rồi gửi.
-4. Copy NGUYÊN câu trả lời JSON của Gemini, quay lại app → "Dán kết quả".
-"""
+MANUAL_README = (
+    "Giải nén (Extract All) trước khi kéo ảnh vào Gemini — "
+    "kéo thẳng từ file zip sẽ bị lỗi tải lên. Mỗi gói dùng một cuộc chat MỚI.\n"
+    "HƯỚNG DẪN (chế độ thủ công):\n"
+    "1. Mở https://gemini.google.com (chọn model mạnh nhất bạn có).\n"
+    "2. Đính kèm TẤT CẢ ảnh trong thư mục images/ theo đúng thứ tự tên file (nếu có).\n"
+    "3. Mở prompt.txt, copy toàn bộ, dán vào ô chat rồi gửi.\n"
+    "4. Copy NGUYÊN câu trả lời JSON của Gemini, quay lại app → 'Dán kết quả'.\n"
+)
 
 
 def manual_bundle(run_id: str) -> Path:
@@ -610,7 +614,8 @@ def manual_bundle(run_id: str) -> Path:
         z.writestr("prompt.txt", prompt)
         for i, im in enumerate(req.images, 1):
             role = "TARGET" if "TARGET" in im.label else "CONTEXT"
-            z.write(im.path, f"images/{i:02d}_{im.label.split()[1]}_{role}{im.path.suffix}")
+            img_bytes = _jpeg_bytes(im.path, max_side=1600, quality=85)
+            z.writestr(f"images/{i:02d}_{im.label.split()[1]}_{role}.jpg", img_bytes)
     return out
 
 

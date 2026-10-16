@@ -591,10 +591,68 @@ function ManualPanel({
       {manualUnits.length === 0 ? (
         <div className="text-gray-500 text-xs">Chưa tạo gói cho bước này.</div>
       ) : (
-        <div className="space-y-2">
-          {manualUnits.map((u) => (
-            <PasteUnit key={`${stage}-${u.unit_index}`} cid={cid} stage={stage} unit={u} total={manualUnits.length} onDone={onDone} />
-          ))}
+        <div className="space-y-3">
+          <AutoPaste cid={cid} stage={stage} onDone={onDone} />
+          <div className="space-y-2">
+            {manualUnits.map((u) => (
+              <PasteUnit key={`${stage}-${u.unit_index}`} cid={cid} stage={stage} unit={u} total={manualUnits.length} onDone={onDone} />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AutoPaste({ cid, stage, onDone }: { cid: string; stage: Stage; onDone: () => void }) {
+  const [raw, setRaw] = useState("");
+  const [infoMsg, setInfoMsg] = useState<string | null>(null);
+  const paste = useMutation({
+    mutationFn: () => dialogueApi.paste(cid, stage, null, raw),
+    onSuccess: (res: { message_vi?: string }) => {
+      setRaw("");
+      setInfoMsg(res?.message_vi || "Đã áp dụng kết quả thành công");
+      onDone();
+    },
+  });
+
+  return (
+    <div className="rounded-lg border-2 border-dashed border-primary/40 bg-primary/5 p-3" data-testid="auto-paste-box">
+      <div className="flex items-center justify-between text-xs font-semibold text-primary">
+        <span className="flex items-center gap-1.5">
+          <ClipboardPaste className="w-4 h-4" /> Dán kết quả (tự nhận gói)
+        </span>
+        <span className="text-[11px] font-normal text-gray-400">
+          Tự động tìm gói có khung / câu khớp trong JSON
+        </span>
+      </div>
+      <div className="mt-2 flex gap-2 items-start">
+        <textarea
+          className="flex-1 bg-background border border-border rounded px-2 py-1 font-mono text-xs h-20"
+          placeholder="Dán JSON của bất kỳ gói nào vào đây — hệ thống sẽ tự tìm đúng gói…"
+          value={raw}
+          onChange={(e) => {
+            setRaw(e.target.value);
+            setInfoMsg(null);
+          }}
+          data-testid="auto-paste-text"
+        />
+        <Button
+          variant="primary"
+          disabled={!raw.trim() || paste.isPending}
+          onClick={() => paste.mutate()}
+          data-testid="auto-paste-btn"
+        >
+          <ClipboardPaste className="w-4 h-4" /> {paste.isPending ? "Đang xử lý…" : "Dán kết quả"}
+        </Button>
+      </div>
+      {infoMsg && <p className="text-xs text-emerald-400 mt-1 font-medium">{infoMsg}</p>}
+      {paste.error && (
+        <div className="mt-1">
+          <ErrorBox error={paste.error} />
+          <pre className="text-[11px] text-red-300/80 whitespace-pre-wrap max-h-40 overflow-auto mt-1">
+            {String((paste.error as { details?: { error?: string } }).details?.error ?? "")}
+          </pre>
         </div>
       )}
     </div>
@@ -615,10 +673,14 @@ function PasteUnit({
   onDone: () => void;
 }) {
   const [raw, setRaw] = useState("");
+  const [infoMsg, setInfoMsg] = useState<string | null>(null);
   const paste = useMutation({
     mutationFn: () => dialogueApi.paste(cid, stage, unit.unit_index, raw),
-    onSuccess: () => {
+    onSuccess: (res: { message_vi?: string }) => {
       setRaw("");
+      if (res?.message_vi) {
+        setInfoMsg(res.message_vi);
+      }
       onDone();
     },
   });
@@ -645,7 +707,10 @@ function PasteUnit({
             className="flex-1 bg-background border border-border rounded px-2 py-1 font-mono text-xs h-20"
             placeholder="Dán JSON Gemini trả về…"
             value={raw}
-            onChange={(e) => setRaw(e.target.value)}
+            onChange={(e) => {
+              setRaw(e.target.value);
+              setInfoMsg(null);
+            }}
             data-testid="paste-text"
           />
           <Button variant="primary" disabled={!raw.trim() || paste.isPending} onClick={() => paste.mutate()}>
@@ -653,6 +718,7 @@ function PasteUnit({
           </Button>
         </div>
       )}
+      {infoMsg && <p className="text-xs text-emerald-400 mt-1 font-medium">{infoMsg}</p>}
       {paste.error && (
         <div className="mt-1">
           <ErrorBox error={paste.error} />
@@ -667,3 +733,4 @@ function PasteUnit({
     </div>
   );
 }
+
