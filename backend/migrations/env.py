@@ -1,5 +1,4 @@
 from logging.config import fileConfig
-from pathlib import Path
 
 from alembic import context
 from sqlmodel import SQLModel
@@ -8,7 +7,8 @@ import app.models  # noqa: F401  — registers all models with SQLModel.metadata
 
 config = context.config
 
-if config.config_file_name is not None:
+# When run from the app (app/migrate.py) we must not reconfigure logging.
+if config.config_file_name is not None and config.attributes.get("configure_logger", True):
     fileConfig(config.config_file_name)
 
 target_metadata = SQLModel.metadata

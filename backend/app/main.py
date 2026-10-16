@@ -4,8 +4,6 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
-from alembic import command as alembic_command
-from alembic.config import Config as AlembicConfig
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,21 +23,12 @@ from app.errors import (
 from app.jobs.event_bus import event_bus
 from app.jobs.runner import job_runner
 from app.logging import setup_logging
+from app.migrate import upgrade_to_head
 from app.storage import ensure_data_dirs
 
 logger = logging.getLogger(__name__)
 
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
-
-
-def _run_migrations() -> None:
-    """B6: Run `alembic upgrade head` on startup using absolute path to alembic.ini."""
-    alembic_ini = _BACKEND_DIR / "alembic.ini"
-    cfg = AlembicConfig(str(alembic_ini))
-    # Override sqlalchemy.url so it uses the configured data_dir
-    db_path = settings.data_dir / "cfs.db"
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path.as_posix()}")
-    alembic_command.upgrade(cfg, "head")
 
 
 @asynccontextmanager
@@ -52,11 +41,14 @@ async def lifespan(app: FastAPI):
         sensitive_tokens=[settings.gemini_api_key] if settings.gemini_api_key else None,
     )
 
-    # B6: apply all pending Alembic migrations before opening the app
+    # B6: apply all pending Alembic migrations before opening the app.
+    # A failed migration must stop startup: running on a stale schema corrupts data later.
+    db_url = f"sqlite:///{(settings.data_dir / 'cfs.db').as_posix()}"
     try:
-        _run_migrations()
+        await asyncio.to_thread(upgrade_to_head, db_url)
     except Exception:
-        logger.exception("Failed to run Alembic migrations — proceeding with existing schema")
+        logger.exception("Database migration failed — refusing to start")
+        raise
 
     # B1: bind the main event loop so publish_threadsafe works from sync endpoints
     event_bus.bind_loop(asyncio.get_running_loop())
@@ -67,7 +59,13 @@ async def lifespan(app: FastAPI):
     await job_runner.stop()
 
 
-def create_app() -> FastAPI:
+def _reject_api_path(full_path: str) -> None:
+    """Unknown /api/* routes must be a JSON 404, never the SPA index.html (review B5)."""
+    if full_path == "api" or full_path.startswith("api/"):
+        raise StarletteHTTPException(status_code=404)
+
+
+def create_app(dist_dir: Path | None = None) -> FastAPI:
     app = FastAPI(
         title="Comic Film Studio",
         version="0.1.0",
@@ -98,7 +96,7 @@ def create_app() -> FastAPI:
     app.include_router(api_router)
 
     # Serve built frontend safely (B5)
-    dist_dir = _BACKEND_DIR.parent / "frontend" / "dist"
+    dist_dir = dist_dir or (_BACKEND_DIR.parent / "frontend" / "dist")
 
     if dist_dir.is_dir():
         # Serve /assets via StaticFiles — no path traversal possible
@@ -108,6 +106,7 @@ def create_app() -> FastAPI:
 
         @app.get("/{full_path:path}", include_in_schema=False)
         async def serve_spa(full_path: str) -> FileResponse:
+            _reject_api_path(full_path)
             # B5: only serve files that are inside dist_dir
             if full_path:
                 try:
@@ -128,10 +127,13 @@ def create_app() -> FastAPI:
 
         @app.get("/{full_path:path}", include_in_schema=False)
         async def serve_no_frontend(full_path: str) -> dict:  # type: ignore[misc]
+            _reject_api_path(full_path)
             return {
                 "name": "Comic Film Studio",
                 "status": "online",
-                "message": "Frontend chưa được build. Vui lòng chạy 'npm run build' trong frontend/",
+                "message": (
+                    "Frontend chưa được build. Vui lòng chạy 'npm run build' trong frontend/"
+                ),
             }
 
     return app

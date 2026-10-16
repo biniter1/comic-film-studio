@@ -71,3 +71,23 @@ mà Phase 1 sẽ đụng ngay. PR #1 đã merge, nên sửa trong **branch mới
 
 ## Kết luận
 **Cần sửa** B1–B6 + N1–N5 trong branch `phase-0-fixes`. Sau khi tech lead duyệt PR sửa → bắt đầu Phase 1.
+
+---
+
+## Vòng 2 — Kết quả sửa (branch `phase-0-fixes`)
+Antigravity hết quota giữa chừng (commit `wip`). Tech lead hoàn thiện phần còn lại.
+
+| Mục | Trạng thái | Bằng chứng |
+|---|---|---|
+| B1 sự kiện từ thread | ✅ `EventBus.bind_loop` + `publish_threadsafe` (Antigravity) | `test_R1_*`; chạy thật: SSE nhận `queued → running → succeeded` |
+| B2 handler `def` | ✅ `asyncio.to_thread` (Antigravity) · test viết lại đo đúng loop của runner | `test_B2_*`; chạy thật: `/api/health` 10ms khi đang chạy `demo_cpu` |
+| B3 phụ thuộc job lỗi | ✅ (Antigravity) | `test_R2_*` |
+| B4 backoff `next_run_at` | ✅ (Antigravity) + **thêm**: lỗi transient sau khi đã bấm hủy → `cancelled` thay vì chạy lại | `test_R3_*`, `test_B4_*`, `test_B4b_*` |
+| B5 path traversal + `/api/*` 404 | ✅ chặn traversal (Antigravity) + **thêm** `/api/*` không tồn tại → 404 JSON; `create_app(dist_dir=…)` để test được | `test_R5_*` (4 URL tấn công, có file secret giả) |
+| B6 Alembic | ✅ `app/migrate.py`: **migration lỗi thì dừng app** (trước đó bị nuốt); **DB cũ tạo bằng `create_all` (máy Bin) được stamp baseline rồi nâng cấp**, không mất dữ liệu; alembic không còn ghi đè cấu hình log | `test_B6_*`, `test_B6b_*` |
+| N1–N5 | ✅ | `doctor.py` sửa: kiểm tra Python 3.12 do uv quản lý (trước đó báo lỗi sai khi Python hệ thống là 3.11) |
+| **Lỗi phát hiện thêm** | ✅ `SecretMaskingFilter` ép `args` thành chuỗi trước khi format → mọi log dạng `%d` (httpx, uvicorn) **ném TypeError** | `test_masking_keeps_percent_d_placeholders_working` |
+| Khác | `payload` chặn secret theo **từ** (`api_key`, `token`) thay vì chuỗi con — tránh chặn nhầm `keyframe_asset_id` ở Phase 3; thêm `.gitattributes` (LF) để hết cảnh báo CRLF trên Windows | |
+
+Kết quả: `ruff check` / `ruff format --check` sạch, **30 test pass** (chạy 3 lần liên tiếp, không flaky), `npm run lint` + `npm run build` pass.
+**Kết luận vòng 2: ĐẠT** — Bin merge PR, sau đó bắt đầu Phase 1.

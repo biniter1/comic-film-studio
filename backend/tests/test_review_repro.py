@@ -15,7 +15,6 @@ from app.jobs.event_bus import event_bus
 from app.jobs.runner import JobRunner, JobService
 from app.models.job import Job
 
-
 # ---------------------------------------------------------------------------
 # Shared fixture
 # ---------------------------------------------------------------------------
@@ -68,7 +67,9 @@ async def test_R2_dependent_of_failed_job_stuck_forever(db):
 
     event_bus.bind_loop(asyncio.get_running_loop())
 
-    parent = svc.enqueue("demo_sleep", {"duration_s": 0, "fail": True, "fail_category": "permanent"})
+    parent = svc.enqueue(
+        "demo_sleep", {"duration_s": 0, "fail": True, "fail_category": "permanent"}
+    )
     child = svc.enqueue("demo_sleep", {"duration_s": 0}, depends_on=[parent.id])
 
     await r.start()
@@ -125,22 +126,35 @@ async def test_R3_cancel_during_backoff_is_honoured(db):
 # ---------------------------------------------------------------------------
 
 
-def test_R5_spa_route_path_traversal(monkeypatch):
+def test_R5_spa_route_path_traversal(tmp_path: Path):
     """B5 fix: path traversal must not leak files outside frontend/dist;
     unknown /api/* routes must return 404 JSON."""
     from fastapi.testclient import TestClient
 
     from app.main import create_app
 
-    c = TestClient(create_app())
+    dist = tmp_path / "web" / "frontend" / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<html>INDEX</html>", encoding="utf-8")
+    (dist / "assets" / "app.js").write_text("console.log(1)", encoding="utf-8")
+    secret = tmp_path / "web" / "secrets.env"
+    secret.write_text("GEMINI_API_KEY=SHOULD-NOT-LEAK", encoding="utf-8")
 
-    # Path traversal attempts — must NOT return pyproject.toml content
+    c = TestClient(create_app(dist_dir=dist))
+
+    # Legit files still served
+    assert c.get("/assets/app.js").text == "console.log(1)"
+    assert "INDEX" in c.get("/some/client/route").text
+
+    # Path traversal attempts — must NOT return the secret file
     for url in [
-        "/..%2f..%2fbackend%2fpyproject.toml",
-        "/%2e%2e/%2e%2e/backend/pyproject.toml",
+        "/..%2f..%2fsecrets.env",
+        "/%2e%2e/%2e%2e/secrets.env",
+        "/..%5c..%5csecrets.env",
+        "/assets/..%2f..%2f..%2fsecrets.env",
     ]:
         r = c.get(url)
-        assert "comic-film-studio-backend" not in r.text, f"{url} leaked a file outside dist"
+        assert "SHOULD-NOT-LEAK" not in r.text, f"{url} leaked a file outside dist"
 
     # /api/* that doesn't exist must be 404 JSON (not index.html 200)
     r = c.get("/api/khong-ton-tai")
@@ -154,34 +168,57 @@ def test_R5_spa_route_path_traversal(monkeypatch):
 
 
 async def test_B2_sync_handler_does_not_block_event_loop(db):
-    """demo_cpu is a `def` handler — event loop must stay responsive while it runs."""
-    from fastapi.testclient import TestClient
+    """While a blocking `def` handler runs, the runner's own event loop must stay responsive.
 
-    from app.main import create_app
-
+    Measured in the SAME loop as the runner: a 50ms sleep must not take much longer.
+    (A TestClient would run its own loop in another thread and prove nothing.)
+    """
     engine, d = db
     svc = JobService(engine=engine)
     r = JobRunner(engine=engine, data_dir=d, backoff_delays=[0.1])
-
     event_bus.bind_loop(asyncio.get_running_loop())
 
-    # Enqueue a 3-second CPU job
-    svc.enqueue("demo_cpu", {"duration_s": 3})
+    j = svc.enqueue("demo_cpu", {"duration_s": 2})
     await r.start()
+    for _ in range(40):  # wait until it is actually running
+        await asyncio.sleep(0.05)
+        with Session(engine) as s:
+            if s.get(Job, j.id).status == "running":
+                break
 
-    # Give the job time to start running
-    await asyncio.sleep(0.5)
+    worst = 0.0
+    for _ in range(10):
+        t0 = time.monotonic()
+        await asyncio.sleep(0.05)
+        worst = max(worst, time.monotonic() - t0)
 
-    # Now measure event loop responsiveness via health endpoint
-    client = TestClient(create_app())
-    t0 = time.monotonic()
-    resp = client.get("/api/health")
-    elapsed_ms = (time.monotonic() - t0) * 1000
-
+    with Session(engine) as s:
+        assert s.get(Job, j.id).status == "running", (
+            "job should still be running during measurement"
+        )
     await r.stop()
+    assert worst < 0.2, f"event loop blocked: a 50ms sleep took {worst * 1000:.0f}ms"
 
-    assert resp.status_code == 200, f"/api/health returned {resp.status_code}"
-    assert elapsed_ms < 200, f"/api/health took {elapsed_ms:.0f}ms (> 200ms) — event loop was blocked"
+
+async def test_B4b_transient_error_after_cancel_is_cancelled(db):
+    """A running job that is cancelled and then raises a transient error must end cancelled."""
+    engine, d = db
+    svc = JobService(engine=engine)
+    r = JobRunner(engine=engine, data_dir=d, backoff_delays=[0.05])
+    event_bus.bind_loop(asyncio.get_running_loop())
+
+    j = svc.enqueue("demo_cpu", {"duration_s": 1, "fail": True, "fail_category": "transient"})
+    await r.start()
+    for _ in range(40):
+        await asyncio.sleep(0.05)
+        with Session(engine) as s:
+            if s.get(Job, j.id).status == "running":
+                break
+    svc.cancel(j.id, runner=r)
+    await asyncio.sleep(1.5)
+    await r.stop()
+    with Session(engine) as s:
+        assert s.get(Job, j.id).status == "cancelled"
 
 
 # ---------------------------------------------------------------------------
@@ -225,7 +262,8 @@ def test_B6_alembic_upgrade_creates_all_columns(tmp_path: Path):
     """B6 fix: upgrade head on an empty DB must create jobs table with next_run_at."""
     from alembic import command as alembic_command
     from alembic.config import Config as AlembicConfig
-    from sqlalchemy import inspect as sa_inspect, create_engine as sa_create_engine
+    from sqlalchemy import create_engine as sa_create_engine
+    from sqlalchemy import inspect as sa_inspect
 
     db_file = tmp_path / "fresh.db"
     alembic_ini = Path(__file__).resolve().parent.parent / "alembic.ini"
@@ -236,17 +274,68 @@ def test_B6_alembic_upgrade_creates_all_columns(tmp_path: Path):
 
     alembic_command.upgrade(cfg, "head")
 
-    eng = sa_create_engine(f"sqlite:///{db_file.as_posix()}", connect_args={"check_same_thread": False})
+    eng = sa_create_engine(
+        f"sqlite:///{db_file.as_posix()}", connect_args={"check_same_thread": False}
+    )
     inspector = sa_inspect(eng)
     assert "jobs" in inspector.get_table_names(), "jobs table missing after upgrade"
 
     col_names = {c["name"] for c in inspector.get_columns("jobs")}
     required = {
-        "id", "type", "status", "depends_on", "input_hash",
-        "attempts", "max_attempts", "progress", "log_path",
-        "error_category", "error_message", "user_action_required",
-        "payload", "next_run_at", "created_at", "started_at", "finished_at",
+        "id",
+        "type",
+        "status",
+        "depends_on",
+        "input_hash",
+        "attempts",
+        "max_attempts",
+        "progress",
+        "log_path",
+        "error_category",
+        "error_message",
+        "user_action_required",
+        "payload",
+        "next_run_at",
+        "created_at",
+        "started_at",
+        "finished_at",
     }
     missing = required - col_names
     assert not missing, f"Missing columns after upgrade head: {missing}"
 
+
+def test_B6b_legacy_create_all_db_is_stamped_and_upgraded(tmp_path: Path):
+    """A DB created by Phase 0's create_all (no alembic_version) must be upgraded, not crash."""
+    import sqlite3
+
+    from sqlalchemy import create_engine as sa_create_engine
+    from sqlalchemy import inspect as sa_inspect
+
+    from app.migrate import upgrade_to_head
+
+    db_file = tmp_path / "legacy.db"
+    url = f"sqlite:///{db_file.as_posix()}"
+    # Phase 0 schema exactly as create_all produced it (without next_run_at)
+    con = sqlite3.connect(db_file)
+    con.execute(
+        "CREATE TABLE jobs (id VARCHAR PRIMARY KEY, type VARCHAR, status VARCHAR, depends_on JSON,"
+        " input_hash VARCHAR, attempts INTEGER, max_attempts INTEGER, progress FLOAT,"
+        " log_path VARCHAR, error_category VARCHAR, error_message VARCHAR,"
+        " user_action_required VARCHAR, payload JSON, created_at DATETIME,"
+        " started_at DATETIME, finished_at DATETIME)"
+    )
+    con.execute("INSERT INTO jobs (id, type, status) VALUES ('JOLD01', 'demo_sleep', 'succeeded')")
+    con.commit()
+    con.close()
+
+    upgrade_to_head(url)
+
+    eng = sa_create_engine(url)
+    insp = sa_inspect(eng)
+    assert "alembic_version" in insp.get_table_names()
+    assert "next_run_at" in {c["name"] for c in insp.get_columns("jobs")}
+    with eng.connect() as conn:
+        from sqlalchemy import text
+
+        assert conn.execute(text("SELECT count(*) FROM jobs")).scalar() == 1, "existing rows lost"
+    eng.dispose()

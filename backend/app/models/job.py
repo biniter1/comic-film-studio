@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from sqlalchemy import Column, JSON
+from sqlalchemy import JSON, Column
 from sqlmodel import Field, SQLModel
 
 
@@ -10,7 +10,9 @@ class Job(SQLModel, table=True):
 
     id: str = Field(default=None, primary_key=True)
     type: str = Field(index=True)
-    status: str = Field(default="queued", index=True)  # queued|running|waiting_user|succeeded|failed|cancelled
+    status: str = Field(
+        default="queued", index=True
+    )  # queued|running|waiting_user|succeeded|failed|cancelled
     depends_on: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     input_hash: Optional[str] = Field(default=None, index=True)
     attempts: int = Field(default=0)

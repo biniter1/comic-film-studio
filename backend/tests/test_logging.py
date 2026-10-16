@@ -44,3 +44,18 @@ def test_setup_logging_writes_json_lines(tmp_path: Path):
     assert "AIzaSyD" not in record["message"]
     assert "my_secret_token" not in record["message"]
     assert "****" in record["message"]
+
+
+def test_masking_keeps_percent_d_placeholders_working():
+    """Regression: masking must not turn int args into str before %d formatting."""
+    import logging
+
+    from app.logging import SecretMaskingFilter
+
+    rec = logging.LogRecord(
+        "x", logging.INFO, __file__, 1, "HTTP %s %d key=%s", ("GET", 200, "AIza" + "A" * 35), None
+    )
+    assert SecretMaskingFilter().filter(rec)
+    out = rec.getMessage()
+    assert out.startswith("HTTP GET 200")
+    assert "AIza" not in out

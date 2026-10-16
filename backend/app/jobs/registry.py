@@ -1,4 +1,5 @@
 import inspect
+import re
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -63,13 +64,18 @@ JobHandlerFunc = SyncHandlerFunc | AsyncHandlerFunc
 
 _JOB_HANDLERS: dict[str, JobHandlerFunc] = {}
 
-_SECRET_KEYS = {"key", "token", "secret", "password"}
+_SECRET_TOKENS = {"key", "apikey", "token", "secret", "password", "passwd", "credential"}
 
 
 def _check_payload(payload: dict[str, Any]) -> None:
-    """Raise ValueError if payload contains secret-like keys (per SPEC §5.6)."""
+    """Raise ValueError if payload contains secret-like keys (per SPEC §5.6).
+
+    Matching is per snake/kebab-case token so that e.g. ``keyframe_asset_id`` is allowed
+    while ``api_key`` / ``access-token`` are rejected.
+    """
     for k in payload:
-        if any(s in k.lower() for s in _SECRET_KEYS):
+        tokens = {t for t in re.split(r"[_\-\s.]+", k.lower()) if t}
+        if tokens & _SECRET_TOKENS:
             raise ValueError(
                 f"Payload key '{k}' looks like a secret. "
                 "Job payloads must contain only IDs and technical parameters."

@@ -107,7 +107,9 @@ async def test_transient_error_retry(test_db):
     else:
         with Session(engine) as session:
             j = session.get(Job, job.id)
-        pytest.fail(f"Job did not fail after exhausting retries, status={j.status if j else 'None'}")
+        pytest.fail(
+            f"Job did not fail after exhausting retries, status={j.status if j else 'None'}"
+        )
 
     await runner.stop()
 

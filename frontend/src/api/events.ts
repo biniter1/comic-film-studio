@@ -26,28 +26,13 @@ export function useEvents(chapterId?: string) {
       try {
         const job = JSON.parse(event.data) as Job;
 
-        // N3: update individual job cache entry
+        // Single-job cache
         queryClient.setQueryData(["job", job.id], job);
 
-        // N3: update list queries — insert only if the job matches the filter,
-        // or update in-place if it already exists in that list.
-        // Strategy: update in-place for all lists; invalidate filtered lists so they re-fetch.
-        queryClient.setQueriesData<Job[]>({ queryKey: ["jobs"] }, (old) => {
-          if (!old) return [job];
-          const existsAt = old.findIndex((item) => item.id === job.id);
-          if (existsAt >= 0) {
-            // Job already in this list — update it in-place (always safe)
-            return old.map((item) => (item.id === job.id ? job : item));
-          }
-          // N3: job is NOT in this list. Only prepend if the list is unfiltered
-          // (queryKey is exactly ["jobs"] with no extra filter key).
-          // We detect "unfiltered" by checking the cache key length.
-          return old;
-        });
-
-        // For the canonical unfiltered list, prepend new jobs that don't exist yet
+        // The app keeps ONE job list (queryKey ["jobs"]) and filters client-side,
+        // so updating it in place (or prepending new jobs) is always correct.
         queryClient.setQueryData<Job[]>(["jobs"], (old) => {
-          if (!old) return [job];
+          if (!old) return old; // not loaded yet — the next fetch will include it
           const exists = old.some((item) => item.id === job.id);
           if (!exists) return [job, ...old];
           return old.map((item) => (item.id === job.id ? job : item));

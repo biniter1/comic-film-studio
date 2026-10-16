@@ -30,10 +30,17 @@ def _run(cmd: list[str]) -> tuple[bool, str]:
 
 
 def check_python312() -> Check:
+    """The backend runs on the Python 3.12 that uv manages; the system Python does not matter."""
+    hint = "uv python install 3.12"
+    if shutil.which("uv"):
+        ok, path = _run(["uv", "python", "find", "3.12"])
+        if ok and path:
+            return Check("Python 3.12", True, f"uv: {path}", None)
+        return Check("Python 3.12", False, None, hint)
+    # No uv yet: accept a system 3.12 if present
     ok, ver = _run([sys.executable, "--version"])
     is_312 = ok and "3.12" in ver
-    hint = None if is_312 else "winget install astral-sh.uv  # rồi: uv python install 3.12"
-    return Check("Python 3.12", is_312, ver if ok else None, hint)
+    return Check("Python 3.12", is_312, ver if ok else None, None if is_312 else hint)
 
 
 def check_uv() -> Check:

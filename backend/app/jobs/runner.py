@@ -1,10 +1,10 @@
 import asyncio
 import logging
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
-import uuid
 
 from sqlalchemy import Engine
 from sqlmodel import Session, select
@@ -289,9 +289,7 @@ class JobRunner:
         with Session(self.engine) as session:
             # B4: only pick up jobs whose next_run_at is due (or null)
             queued_jobs = session.exec(
-                select(Job)
-                .where(Job.status == "queued")
-                .order_by(Job.created_at.asc())
+                select(Job).where(Job.status == "queued").order_by(Job.created_at.asc())
             ).all()
 
             for job in queued_jobs:
@@ -417,7 +415,14 @@ class JobRunner:
                     j.error_message = je.message
                     j.user_action_required = je.user_action_required
 
-                    if je.category == "transient":
+                    if self.is_cancelled(job_id):
+                        j.status = "cancelled"
+                        j.finished_at = datetime.now(timezone.utc)
+                        session.add(j)
+                        session.commit()
+                        session.refresh(j)
+                        self._emit_event(j)
+                    elif je.category == "transient":
                         j.attempts += 1
                         if j.attempts < j.max_attempts:
                             delay_idx = min(j.attempts - 1, len(self.backoff_delays) - 1)
