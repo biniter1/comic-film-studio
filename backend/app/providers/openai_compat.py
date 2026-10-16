@@ -75,6 +75,7 @@ class OpenAICompatProvider:
         base_url: str,
         api_key: str | None,
         auth_header: str = "x-api-key",
+        reasoning_effort: str = "low",
     ):
         if not api_key:
             raise ProviderError(
@@ -83,6 +84,7 @@ class OpenAICompatProvider:
         self.base_url = (base_url or "https://revidapi.com/v1").rstrip("/")
         self.api_key = api_key
         self.auth_header = auth_header or "x-api-key"
+        self.reasoning_effort = reasoning_effort or "low"
 
     def _get_headers(self) -> dict[str, str]:
         headers = {
@@ -120,6 +122,7 @@ class OpenAICompatProvider:
             "messages": messages,
             "response_format": {"type": "json_object"},
             "temperature": 0.3,
+            "reasoning_effort": self.reasoning_effort,
         }
 
         url = f"{self.base_url}/chat/completions"
@@ -151,9 +154,12 @@ class OpenAICompatProvider:
         usage = data.get("usage") or {}
         prompt_tokens = usage.get("prompt_tokens")
         completion_tokens = usage.get("completion_tokens")
+        details = usage.get("completion_tokens_details") or {}
+        reasoning_tokens = details.get("reasoning_tokens")
         log_msg = (
             f"OpenAICompat usage: prompt_tokens={prompt_tokens}, "
-            f"completion_tokens={completion_tokens}"
+            f"completion_tokens={completion_tokens}, "
+            f"reasoning_tokens={reasoning_tokens}"
         )
         ctx = current_job_ctx.get()
 

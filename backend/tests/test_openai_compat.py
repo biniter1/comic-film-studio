@@ -56,11 +56,16 @@ def test_openai_compat_request_format_and_parsing(tmp_path):
                 "prompt_tokens": 150,
                 "completion_tokens": 40,
                 "total_tokens": 190,
+                "completion_tokens_details": {
+                    "reasoning_tokens": 25,
+                },
             },
         },
     )
 
-    provider = OpenAICompatProvider(base_url=base_url, api_key=key, auth_header="x-api-key")
+    provider = OpenAICompatProvider(
+        base_url=base_url, api_key=key, auth_header="x-api-key", reasoning_effort="high"
+    )
 
     log_lines = []
     dummy_ctx = JobContext(
@@ -101,6 +106,7 @@ def test_openai_compat_request_format_and_parsing(tmp_path):
     assert body["model"] == "gpt-4o"
     assert body["response_format"] == {"type": "json_object"}
     assert body["temperature"] == 0.3
+    assert body["reasoning_effort"] == "high"
 
     messages = body["messages"]
     assert len(messages) == 4
@@ -123,8 +129,13 @@ def test_openai_compat_request_format_and_parsing(tmp_path):
     assert messages[2] == {"role": "assistant", "content": '{"previous": "attempt"}'}
     assert messages[3] == {"role": "user", "content": "Fix formatting"}
 
-    # Check job usage logging
-    assert any("prompt_tokens=150" in line and "completion_tokens=40" in line for line in log_lines)
+    # Check job usage logging (including reasoning_tokens)
+    assert any(
+        "prompt_tokens=150" in line
+        and "completion_tokens=40" in line
+        and "reasoning_tokens=25" in line
+        for line in log_lines
+    )
 
 
 @respx.mock
@@ -149,6 +160,8 @@ def test_openai_compat_authorization_bearer_header(tmp_path):
     res = provider.generate(req)
     assert res == '{"ok": true}'
     assert endpoint.calls.last.request.headers.get("Authorization") == f"Bearer {key}"
+    body = json.loads(endpoint.calls.last.request.content)
+    assert body["reasoning_effort"] == "low"
 
 
 @respx.mock
@@ -265,6 +278,12 @@ def test_settings_openai_key_crud_and_test(client: TestClient):
     s = client.get("/api/settings").json()
     assert s["openai_configured"] is False
     assert s["openai_key_hint"] is None
+    assert s["openai_reasoning_effort"] == "low"
+
+    # Update openai_reasoning_effort
+    client.put("/api/settings", json={"openai_reasoning_effort": "high"})
+    s2 = client.get("/api/settings").json()
+    assert s2["openai_reasoning_effort"] == "high"
 
     # Test without configuring key -> 409
     res_test_unconf = client.post("/api/settings/openai-key/test")
@@ -314,6 +333,8 @@ def test_registry_provider_selection(monkeypatch):
     monkeypatch.setattr(settings, "openai_compat_api_key", "test-openai-key")
     monkeypatch.setattr(settings, "openai_base_url", "https://revidapi.com/v1")
     monkeypatch.setattr(settings, "openai_auth_header", "x-api-key")
+    monkeypatch.setattr(settings, "openai_reasoning_effort", "high")
     p2 = registry.get_provider()
     assert p2.name == "openai_compat"
     assert isinstance(p2, OpenAICompatProvider)
+    assert p2.reasoning_effort == "high"

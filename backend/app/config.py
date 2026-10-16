@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     analysis_provider: str = "gemini"  # "gemini" | "openai_compat"
     openai_base_url: str = "https://revidapi.com/v1"
     openai_auth_header: str = "x-api-key"  # "x-api-key" | "authorization-bearer"
+    openai_reasoning_effort: str = "low"  # "low" | "medium" | "high"
     openai_compat_api_key: Optional[str] = None
 
     def load_secrets(self) -> None:
@@ -68,6 +69,7 @@ class Settings(BaseSettings):
         "analysis_provider",
         "openai_base_url",
         "openai_auth_header",
+        "openai_reasoning_effort",
     )
 
     def load_overrides(self) -> None:

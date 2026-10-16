@@ -17,6 +17,11 @@ test("settings: save Gemini key with Enter shows feedback, key hint, delete", as
 test("settings: switch to OpenAI provider, save key, test hint, and delete", async ({ page }) => {
   await page.goto("/settings");
   await page.getByTestId("provider-openai-btn").click();
+  const effortSelect = page.getByTestId("openai-reasoning-effort-select");
+  await expect(effortSelect).toHaveValue("low");
+  await effortSelect.selectOption("high");
+  await expect(effortSelect).toHaveValue("high");
+
   const input = page.getByPlaceholder("sk-…");
   await input.fill("sk-revid-e2e-fake-key-5432");
   await input.press("Enter");
@@ -26,4 +31,5 @@ test("settings: switch to OpenAI provider, save key, test hint, and delete", asy
   await page.getByRole("button", { name: "Xóa key" }).click();
   await expect(page.getByText("Dán API Key cổng tương thích OpenAI:")).toBeVisible();
 });
+
 

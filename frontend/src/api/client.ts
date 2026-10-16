@@ -58,9 +58,11 @@ export interface SettingsData {
   openai_auth_header: "x-api-key" | "authorization-bearer";
   openai_configured: boolean;
   openai_key_hint: string | null;
+  openai_reasoning_effort: "low" | "medium" | "high";
   ffmpeg_available: boolean;
   ffmpeg_version: string | null;
 }
+
 
 export interface ProviderStatus {
   providers: {

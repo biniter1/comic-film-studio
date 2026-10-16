@@ -14,6 +14,7 @@ export function SettingsPage() {
   const [provider, setProvider] = useState<"gemini" | "openai_compat">("gemini");
   const [openaiBaseUrl, setOpenaiBaseUrl] = useState("https://revidapi.com/v1");
   const [openaiAuthHeader, setOpenaiAuthHeader] = useState<"x-api-key" | "authorization-bearer">("x-api-key");
+  const [openaiReasoningEffort, setOpenaiReasoningEffort] = useState<"low" | "medium" | "high">("low");
   const [openaiKeyInput, setOpenaiKeyInput] = useState("");
   const [openaiKeyMsg, setOpenaiKeyMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -35,8 +36,10 @@ export function SettingsPage() {
       setProvider(settings.analysis_provider || "gemini");
       setOpenaiBaseUrl(settings.openai_base_url || "https://revidapi.com/v1");
       setOpenaiAuthHeader(settings.openai_auth_header || "x-api-key");
+      setOpenaiReasoningEffort(settings.openai_reasoning_effort || "low");
     }
   }, [settings]);
+
 
   const [keyMsg, setKeyMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const refreshStatus = () => {
@@ -95,12 +98,16 @@ export function SettingsPage() {
     },
   });
   const updateOpenAISettingsMutation = useMutation({
-    mutationFn: (params: { openai_base_url?: string; openai_auth_header?: "x-api-key" | "authorization-bearer" }) =>
-      api.updateSettings(params),
+    mutationFn: (params: {
+      openai_base_url?: string;
+      openai_auth_header?: "x-api-key" | "authorization-bearer";
+      openai_reasoning_effort?: "low" | "medium" | "high";
+    }) => api.updateSettings(params),
     onSuccess: () => {
       refreshStatus();
     },
   });
+
 
 
   const updateMutation = useMutation({
@@ -332,7 +339,7 @@ export function SettingsPage() {
               )}
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div>
                 <label className="text-xs text-gray-400 block mb-1">Base URL (cổng API):</label>
                 <input
@@ -360,7 +367,26 @@ export function SettingsPage() {
                   <option value="authorization-bearer">Authorization: Bearer &lt;key&gt;</option>
                 </select>
               </div>
+
+              <div>
+                <label className="text-xs text-gray-400 block mb-1">Mức suy luận (reasoning_effort):</label>
+                <select
+                  data-testid="openai-reasoning-effort-select"
+                  value={openaiReasoningEffort}
+                  onChange={(e) => {
+                    const val = e.target.value as "low" | "medium" | "high";
+                    setOpenaiReasoningEffort(val);
+                    updateOpenAISettingsMutation.mutate({ openai_reasoning_effort: val });
+                  }}
+                  className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-primary"
+                >
+                  <option value="low">low (mặc định - nhanh, tiết kiệm)</option>
+                  <option value="medium">medium (trung bình)</option>
+                  <option value="high">high (suy nghĩ sâu)</option>
+                </select>
+              </div>
             </div>
+
 
             <form
               className="space-y-2"

@@ -20,6 +20,7 @@ def _default() -> AnalysisProvider:
             base_url=settings.openai_base_url,
             api_key=settings.openai_compat_api_key,
             auth_header=settings.openai_auth_header,
+            reasoning_effort=settings.openai_reasoning_effort,
         )
 
     from app.providers.gemini import GeminiProvider
