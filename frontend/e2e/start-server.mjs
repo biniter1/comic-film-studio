@@ -10,7 +10,12 @@ const here = dirname(fileURLToPath(import.meta.url));
 const dataDir = mkdtempSync(join(tmpdir(), "cfs-e2e-"));
 const child = spawn("uv", ["run", "cfs"], {
   cwd: join(here, "..", "..", "backend"),
-  env: { ...process.env, CFS_DATA_DIR: dataDir, CFS_PORT: process.env.CFS_PORT || "8766" },
+  env: {
+    ...process.env,
+    CFS_DATA_DIR: dataDir,
+    CFS_PORT: process.env.CFS_PORT || "8766",
+    CFS_FAKE_PROVIDER: "e2e", // scripted AI answers; never calls Gemini
+  },
   stdio: "inherit",
   shell: process.platform === "win32",
 });

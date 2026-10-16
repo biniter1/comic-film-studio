@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpen, FolderKanban, Pencil, Plus, Scissors, Trash2, Upload } from "lucide-react";
+import { BookOpen, FolderKanban, MessageSquareText, Pencil, Plus, Scissors, Trash2, Upload } from "lucide-react";
 import { formatBytes, rememberChapter, studio } from "../api/studio";
 import { Button, Empty, ErrorBox, PageHeader, StatusBadge } from "../components/common";
 
@@ -165,6 +165,11 @@ export function ProjectDetailPage() {
         }
         actions={
           <>
+            <Link to={`/projects/${pid}/glossary`}>
+              <Button>
+                <BookOpen className="w-4 h-4" /> Thuật ngữ & nhân vật
+              </Button>
+            </Link>
             <Button
               onClick={() => {
                 const v = window.prompt("Tên dự án mới", project.data?.name);
@@ -228,6 +233,14 @@ export function ProjectDetailPage() {
                 <Link to={`/chapters/${ch.id}/frames`} onClick={() => rememberChapter(ch.id)}>
                   <Button disabled={ch.page_count === 0}>
                     <Scissors className="w-4 h-4" /> Khung
+                  </Button>
+                </Link>
+                <Link to={`/chapters/${ch.id}/dialogue`} onClick={() => rememberChapter(ch.id)}>
+                  <Button
+                    disabled={!["frames_approved", "analyzing", "dialogue_draft", "dialogue_approved"].includes(ch.status)}
+                    title="Kịch bản thoại (cần duyệt khung trước)"
+                  >
+                    <MessageSquareText className="w-4 h-4" /> Thoại
                   </Button>
                 </Link>
                 <Button
