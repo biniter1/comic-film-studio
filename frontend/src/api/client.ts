@@ -53,6 +53,11 @@ export interface SettingsData {
   gemini_key_hint: string | null;
   analysis_model_vision: string;
   analysis_model_text: string;
+  analysis_provider: "gemini" | "openai_compat";
+  openai_base_url: string;
+  openai_auth_header: "x-api-key" | "authorization-bearer";
+  openai_configured: boolean;
+  openai_key_hint: string | null;
   ffmpeg_available: boolean;
   ffmpeg_version: string | null;
 }
@@ -60,6 +65,10 @@ export interface SettingsData {
 export interface ProviderStatus {
   providers: {
     gemini: {
+      configured: boolean;
+      status: string;
+    };
+    openai_compat?: {
       configured: boolean;
       status: string;
     };
@@ -72,6 +81,7 @@ export interface ProviderStatus {
     };
   };
 }
+
 
 export async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const url = path.startsWith("/api") ? path : `/api${path.startsWith("/") ? path : `/${path}`}`;
@@ -142,6 +152,11 @@ export const api = {
     job_concurrency?: number;
     max_parallel_muse_tabs?: number;
     muse_clip_seconds?: number;
+    analysis_model_vision?: string;
+    analysis_model_text?: string;
+    analysis_provider?: "gemini" | "openai_compat";
+    openai_base_url?: string;
+    openai_auth_header?: "x-api-key" | "authorization-bearer";
     gemini_api_key?: string;
   }) =>
     request<SettingsData>("/settings", {
@@ -155,6 +170,14 @@ export const api = {
     request<{ ok: boolean; message_vi: string; model: string | null }>("/settings/gemini-key/test", {
       method: "POST",
     }),
+  saveOpenAIKey: (api_key: string) =>
+    request<SettingsData>("/settings/openai-key", { method: "PUT", body: JSON.stringify({ api_key }) }),
+  deleteOpenAIKey: () => request<SettingsData>("/settings/openai-key", { method: "DELETE" }),
+  testOpenAIKey: () =>
+    request<{ ok: boolean; message_vi: string; model: string | null }>("/settings/openai-key/test", {
+      method: "POST",
+    }),
   getProvidersStatus: () =>
     request<ProviderStatus>("/settings/providers/status"),
 };
+
