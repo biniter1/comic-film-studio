@@ -36,6 +36,7 @@ async def lifespan(app: FastAPI):
     # Startup
     ensure_data_dirs()
     settings.load_secrets()
+    settings.load_overrides()
     setup_logging(
         settings.data_dir,
         sensitive_tokens=[settings.gemini_api_key] if settings.gemini_api_key else None,
