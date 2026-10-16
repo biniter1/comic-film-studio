@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BookOpen, FolderKanban, Pencil, Plus, Scissors, Trash2, Upload } from "lucide-react";
@@ -17,26 +17,42 @@ function CreateInline({
   pending: boolean;
 }) {
   const [value, setValue] = useState("");
+  const [hint, setHint] = useState(false);
+  const input = useRef<HTMLInputElement>(null);
   return (
     <form
-      className="flex gap-2"
+      className="flex flex-wrap items-start gap-2"
       onSubmit={(e) => {
         e.preventDefault();
-        if (value.trim()) {
-          onCreate(value.trim());
-          setValue("");
+        if (!value.trim()) {
+          // Button stays clickable: an always-disabled button looked broken. Explain instead.
+          setHint(true);
+          input.current?.focus();
+          return;
         }
+        onCreate(value.trim());
+        setValue("");
+        setHint(false);
       }}
     >
-      <input
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        placeholder={placeholder}
-        maxLength={200}
-        className="w-64 rounded-lg bg-surface border border-border px-3 py-1.5 text-sm text-gray-100 placeholder:text-gray-500 focus:outline-none focus:border-primary"
-      />
-      <Button variant="primary" type="submit" disabled={!value.trim() || pending}>
-        <Plus className="w-4 h-4" /> {cta}
+      <div className="flex flex-col">
+        <input
+          ref={input}
+          value={value}
+          onChange={(e) => {
+            setValue(e.target.value);
+            if (e.target.value.trim()) setHint(false);
+          }}
+          placeholder={placeholder}
+          maxLength={200}
+          className={`w-64 rounded-lg bg-surface border px-3 py-1.5 text-sm text-gray-100 placeholder:text-gray-500 focus:outline-none focus:border-primary ${
+            hint ? "border-amber-400" : "border-border"
+          }`}
+        />
+        {hint && <span className="text-xs text-amber-300 mt-1">Nhập tên trước rồi bấm {cta.toLowerCase()}</span>}
+      </div>
+      <Button variant="primary" type="submit" disabled={pending}>
+        <Plus className="w-4 h-4" /> {pending ? "Đang tạo…" : cta}
       </Button>
     </form>
   );
