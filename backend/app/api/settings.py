@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from app.config import settings
 from app.errors import AppError
 from app.providers.gemini_check import check_gemini_key
+from app.providers.openai_check import check_openai_key
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -33,6 +34,9 @@ class SettingsUpdate(BaseModel):
     muse_clip_seconds: Optional[float] = None
     analysis_model_vision: Optional[str] = None
     analysis_model_text: Optional[str] = None
+    analysis_provider: Optional[str] = None
+    openai_base_url: Optional[str] = None
+    openai_auth_header: Optional[str] = None
     # kept for backward compatibility; prefer PUT /settings/gemini-key
     gemini_api_key: Optional[str] = None
 
@@ -41,9 +45,12 @@ class GeminiKeyIn(BaseModel):
     api_key: str
 
 
-def _key_hint() -> Optional[str]:
-    k = settings.gemini_api_key
-    return f"…{k[-4:]}" if k and len(k) >= 8 else None
+class OpenAIKeyIn(BaseModel):
+    api_key: str
+
+
+def _key_hint(k: Optional[str]) -> Optional[str]:
+    return f"…{k[-4:]}" if k and len(k) >= 4 else None
 
 
 @router.get("")
@@ -58,8 +65,13 @@ def get_settings() -> dict[str, Any]:
         "muse_clip_seconds": settings.muse_clip_seconds,
         "analysis_model_vision": settings.analysis_model_vision,
         "analysis_model_text": settings.analysis_model_text,
+        "analysis_provider": settings.analysis_provider,
+        "openai_base_url": settings.openai_base_url,
+        "openai_auth_header": settings.openai_auth_header,
         "gemini_configured": bool(settings.gemini_api_key),
-        "gemini_key_hint": _key_hint(),
+        "gemini_key_hint": _key_hint(settings.gemini_api_key),
+        "openai_configured": bool(settings.openai_compat_api_key),
+        "openai_key_hint": _key_hint(settings.openai_compat_api_key),
         "ffmpeg_available": has_ffmpeg,
         "ffmpeg_version": ffmpeg_ver,
     }
@@ -77,6 +89,12 @@ def update_settings(update: SettingsUpdate) -> dict[str, Any]:
         settings.analysis_model_vision = update.analysis_model_vision.strip()
     if update.analysis_model_text:
         settings.analysis_model_text = update.analysis_model_text.strip()
+    if update.analysis_provider in ("gemini", "openai_compat"):
+        settings.analysis_provider = update.analysis_provider
+    if update.openai_base_url:
+        settings.openai_base_url = update.openai_base_url.strip()
+    if update.openai_auth_header in ("x-api-key", "authorization-bearer"):
+        settings.openai_auth_header = update.openai_auth_header
     settings.save_overrides()  # survive restarts
     if update.gemini_api_key is not None:
         settings.save_gemini_key(update.gemini_api_key.strip() or None)
@@ -110,6 +128,39 @@ def test_gemini_key() -> dict[str, Any]:
     return {"ok": r.ok, "message_vi": r.message_vi, "model": r.model}
 
 
+@router.put("/openai-key")
+def set_openai_key(body: OpenAIKeyIn) -> dict[str, Any]:
+    key = body.api_key.strip()
+    if not key or any(c.isspace() for c in key):
+        raise AppError(
+            "VALIDATION_FAILED",
+            "API key trông không đúng (quá ngắn hoặc có khoảng trắng).",
+            status_code=422,
+        )
+    settings.save_openai_key(key)
+    return get_settings()
+
+
+@router.delete("/openai-key")
+def delete_openai_key() -> dict[str, Any]:
+    settings.save_openai_key(None)
+    return get_settings()
+
+
+@router.post("/openai-key/test")
+def test_openai_key() -> dict[str, Any]:
+    if not settings.openai_compat_api_key:
+        raise AppError("OPENAI_NOT_CONFIGURED", "Chưa có API key OpenAI Compat", status_code=409)
+    model = settings.analysis_model_vision or settings.analysis_model_text
+    r = check_openai_key(
+        base_url=settings.openai_base_url,
+        api_key=settings.openai_compat_api_key,
+        auth_header=settings.openai_auth_header,
+        model=model,
+    )
+    return {"ok": r.ok, "message_vi": r.message_vi, "model": r.model}
+
+
 @router.get("/providers/status")
 def get_providers_status() -> dict[str, Any]:
     has_ffmpeg, ffmpeg_ver = check_ffmpeg()
@@ -118,7 +169,11 @@ def get_providers_status() -> dict[str, Any]:
             "gemini": {
                 "configured": bool(settings.gemini_api_key),
                 "status": "configured" if settings.gemini_api_key else "not_configured",
-            }
+            },
+            "openai_compat": {
+                "configured": bool(settings.openai_compat_api_key),
+                "status": "configured" if settings.openai_compat_api_key else "not_configured",
+            },
         },
         "tools": {
             "ffmpeg": {
