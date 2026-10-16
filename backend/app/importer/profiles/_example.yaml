@@ -1,0 +1,17 @@
+# Mẫu SiteProfile — sao chép thành <ten-web>.yaml (không bắt đầu bằng "_") để dùng.
+# Chỉ dùng cho nguồn bạn được phép truy cập. App KHÔNG vượt đăng nhập/captcha/chống bot.
+
+# Tên miền (khớp cả tên miền con, vd "example.com" khớp "www.example.com")
+domain: example.com
+
+# CSS selector chọn ảnh trang truyện (hoặc khối chứa các <img>)
+image_selector: "div.reading-content img"
+
+# Thuộc tính chứa URL ảnh, theo thứ tự ưu tiên (web lazy-load thường dùng data-src)
+image_attr:
+  - data-src
+  - data-original
+  - src
+
+# Gửi header Referer = URL chapter khi tải ảnh (nhiều web yêu cầu)
+referer: true

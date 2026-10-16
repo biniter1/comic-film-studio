@@ -72,3 +72,31 @@ def create_chapter_dir(project_id: str, chapter_id: str, data_dir: Path | None =
     for sub in ["pages", "frames", "analysis", "keyframes", "boundary", "takes", "tts", "exports"]:
         (chapter_dir / sub).mkdir(parents=True, exist_ok=True)
     return chapter_dir
+
+
+# ---------------------------------------------------------------------------
+# Project / asset paths (Phase 1). DB stores paths relative to the project dir.
+# ---------------------------------------------------------------------------
+def project_dir(project_id: str, data_dir: Path | None = None) -> Path:
+    d = data_dir or get_data_dir()
+    return resolve_safe_path(d / "projects", project_id)
+
+
+def chapter_dir(project_id: str, chapter_id: str, data_dir: Path | None = None) -> Path:
+    return resolve_safe_path(project_dir(project_id, data_dir) / "chapters", chapter_id)
+
+
+def to_relative(project_root: Path, absolute: Path) -> str:
+    """Relative POSIX-style path stored in the DB (works on Windows and Linux)."""
+    return absolute.resolve().relative_to(project_root.resolve()).as_posix()
+
+
+def asset_abs_path(project_id: str, rel_path: str, data_dir: Path | None = None) -> Path:
+    """Resolve a stored relative asset path, refusing anything outside the project dir."""
+    return resolve_safe_path(project_dir(project_id, data_dir), rel_path)
+
+
+def tmp_dir(data_dir: Path | None = None) -> Path:
+    d = (data_dir or get_data_dir()) / "tmp"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
