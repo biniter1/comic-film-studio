@@ -170,23 +170,30 @@ def test_quota_error_fails_job_with_user_action(c):
     assert "thủ công" in read["user_action_required"]
 
 
-def test_frame_change_drops_dialogue(c):
+def test_frame_changes_vs_script(c):
     _, cid, frames = chapter_with_frames(c)
     use_fake(standard_script(frames))
     run_api(c, cid)
     fr = c.get(f"/api/chapters/{cid}/frames").json()["frames"]
+    ranges = [{"y0": f["y0"], "y1": f["y1"]} for f in fr]
+
+    def put(rs):
+        r = c.put(f"/api/chapters/{cid}/frames", json={"frames": rs})
+        assert r.status_code == 200, r.text
+        return c.get(f"/api/chapters/{cid}/dialogue").json()
+
     # unchanged save keeps the script
-    c.put(
-        f"/api/chapters/{cid}/frames", json={"frames": [{"y0": f["y0"], "y1": f["y1"]} for f in fr]}
-    )
-    assert c.get(f"/api/chapters/{cid}").json()["status"] == "dialogue_draft"
-    assert len(c.get(f"/api/chapters/{cid}/dialogue").json()["lines"]) == 3
-    # removing a frame drops it
-    c.put(
-        f"/api/chapters/{cid}/frames",
-        json={"frames": [{"y0": f["y0"], "y1": f["y1"]} for f in fr[:2]]},
-    )
-    d = c.get(f"/api/chapters/{cid}/dialogue").json()
+    d = put(ranges)
+    assert d["status"] == "dialogue_draft" and len(d["lines"]) == 3
+    # removing frame 1 (e.g. a banner) keeps the rest; frame 2's line re-anchors to frame 3
+    d = put(ranges[1:])
+    assert d["status"] == "dialogue_draft"
+    assert [x["source_frame_id"] for x in d["lines"]] == frames[1:]
+    assert d["lines"][0]["anchor_frame_id"] == frames[2]
+    assert [x["order"] for x in d["lines"]] == [1, 2]
+    # a changed range invalidates the analysis
+    changed = [dict(ranges[1], y1=ranges[1]["y1"] - 10), ranges[2]]
+    d = put(changed)
     assert d["status"] == "frames_draft" and d["lines"] == []
 
 

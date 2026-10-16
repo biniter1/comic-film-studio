@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Combine, ImageOff, RotateCcw, Save, Scissors, Undo2, X } from "lucide-react";
+import { CheckCircle2, Combine, ImageOff, MessageSquareText, RotateCcw, Save, Scissors, Undo2, X } from "lucide-react";
 import { FrameItem, rememberChapter, studio } from "../api/studio";
 import { Button, Empty, ErrorBox, JobProgress, PageHeader, StatusBadge } from "../components/common";
 import { useJob } from "../api/useJob";
@@ -153,6 +153,24 @@ export function FramesPage() {
     if (job.data?.status === "succeeded") qc.invalidateQueries({ queryKey: ["frames", cid] });
   }, [job.data?.status, cid, qc]);
 
+  const ch = chapter.data;
+  const status = data.data?.status ?? ch?.status;
+  const approved = ["frames_approved", "analyzing", "dialogue_draft", "dialogue_approved"].includes(status ?? "");
+  const hasScript = status === "dialogue_draft" || status === "dialogue_approved";
+  const doSave = () => {
+    const keys = new Set(serverRanges.map((r) => `${r.y0}:${r.y1}`));
+    const removalOnly = ranges.every((r) => keys.has(`${r.y0}:${r.y1}`));
+    if (
+      hasScript &&
+      !removalOnly &&
+      !window.confirm(
+        "Bạn đã sửa/thêm khung nên kịch bản thoại hiện tại sẽ bị xóa (có bản sao lưu) và phải phân tích lại. Tiếp tục?"
+      )
+    )
+      return;
+    save.mutate();
+  };
+
   // keyboard shortcuts
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -161,7 +179,7 @@ export function FramesPage() {
         undo();
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
         e.preventDefault();
-        if (dirty && !save.isPending) save.mutate();
+        if (dirty && !save.isPending) doSave();
       } else if ((e.key === "Delete" || e.key === "Backspace") && selected !== null && !busy) {
         const tag = (e.target as HTMLElement | null)?.tagName;
         if (tag === "INPUT" || tag === "TEXTAREA") return;
@@ -172,7 +190,7 @@ export function FramesPage() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [undo, dirty, save, selected, busy, ranges]);
+  }, [undo, dirty, save, selected, busy, ranges, serverRanges, status]);
   // warn before leaving with unsaved edits
   useEffect(() => {
     if (!dirty) return;
@@ -181,8 +199,6 @@ export function FramesPage() {
     return () => window.removeEventListener("beforeunload", h);
   }, [dirty]);
 
-  const ch = chapter.data;
-  const status = data.data?.status ?? ch?.status;
 
   return (
     <div className="p-8">
@@ -222,18 +238,25 @@ export function FramesPage() {
             >
               <RotateCcw className="w-4 h-4" /> Cắt lại tự động
             </Button>
-            <Button variant="primary" disabled={!dirty || save.isPending || busy} onClick={() => save.mutate()}>
+            <Button variant="primary" disabled={!dirty || save.isPending || busy} onClick={doSave}>
               <Save className="w-4 h-4" /> {save.isPending ? "Đang lưu…" : "Lưu (Ctrl+S)"}
             </Button>
             <Button
               variant="primary"
-              disabled={dirty || busy || ranges.length === 0 || status === "frames_approved" || approve.isPending}
+              disabled={dirty || busy || ranges.length === 0 || approved || approve.isPending}
               title={dirty ? "Lưu thay đổi trước khi duyệt" : undefined}
               onClick={() => approve.mutate()}
               className="!bg-emerald-700 hover:!bg-emerald-600"
             >
-              <CheckCircle2 className="w-4 h-4" /> {status === "frames_approved" ? "Đã duyệt" : "Duyệt khung"}
+              <CheckCircle2 className="w-4 h-4" /> {approved ? "Đã duyệt" : "Duyệt khung"}
             </Button>
+            {approved && !dirty && (
+              <Link to={`/chapters/${cid}/dialogue`}>
+                <Button variant="primary" data-testid="to-dialogue">
+                  <MessageSquareText className="w-4 h-4" /> Kịch bản thoại →
+                </Button>
+              </Link>
+            )}
           </>
         }
       />

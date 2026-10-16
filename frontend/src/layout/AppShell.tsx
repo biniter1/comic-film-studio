@@ -35,10 +35,13 @@ const ACTIVE =
 const IDLE =
   "flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-xs font-medium transition text-gray-400 hover:text-gray-200 hover:bg-surface-raised/60";
 
-/** Chapter screens live under /chapters/:cid/{import,frames}; keep their nav item highlighted. */
+/** Chapter screens live under /chapters/:cid/{import,frames,dialogue}; keep their nav item highlighted. */
 function navActive(to: string, isActive: boolean, path: string): boolean {
+  if (to === "/projects") return isActive && !/^\/projects\/[^/]+\/glossary/.test(path);
   if (to === "/import") return isActive || /^\/chapters\/[^/]+\/import/.test(path);
   if (to === "/frames") return isActive || /^\/chapters\/[^/]+\/frames/.test(path);
+  if (to === "/script")
+    return isActive || /^\/chapters\/[^/]+\/dialogue/.test(path) || /^\/projects\/[^/]+\/glossary/.test(path);
   return isActive;
 }
 

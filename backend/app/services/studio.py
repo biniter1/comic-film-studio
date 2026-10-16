@@ -585,11 +585,24 @@ def put_frames(cid: str, ranges: list[tuple[int, int]]) -> dict[str, Any]:
         existing = {(f.y0, f.y1): f for f in s.exec(select(Frame).where(Frame.chapter_id == cid))}
         keep = set(ranges)
         changed = set(existing) != keep
-        if changed:
-            drop_analysis(s, cid)  # frame set changed → re-run analysis
-        for key, f in existing.items():
-            if key not in keep:
-                s.delete(f)
+        # Only removing frames (e.g. a translator banner) keeps the script: just the removed
+        # frames' lines go. New/changed ranges → the analysis no longer matches → drop it.
+        removal_only = changed and keep <= set(existing)
+        if changed and not removal_only:
+            drop_analysis(s, cid)
+        removed = [f for key, f in existing.items() if key not in keep]
+        if removed:
+            gone = {f.id for f in removed}
+            for d in s.exec(select(DialogueLine).where(DialogueLine.chapter_id == cid)):
+                if d.source_frame_id in gone:
+                    s.delete(d)
+                elif d.anchor_frame_id in gone:
+                    d.anchor_frame_id = None
+                    d.anchor_locked = False
+                    s.add(d)
+            s.flush()
+        for f in removed:
+            s.delete(f)
         for i, key in enumerate(ranges, 1):
             if key in existing:
                 existing[key].idx = i
@@ -605,7 +618,13 @@ def put_frames(cid: str, ranges: list[tuple[int, int]]) -> dict[str, Any]:
     with _session() as s:
         c = s.get(Chapter, cid)
         assert c
-        if changed or c.status not in ("frames_approved", "dialogue_draft", "dialogue_approved"):
+        has_script = c.status in ("dialogue_draft", "dialogue_approved")
+        if removal_only and has_script:
+            from app.analysis.stages import recompute_anchors
+
+            recompute_anchors(s, cid)
+            c.status = "dialogue_draft"
+        elif changed or c.status not in ("frames_approved", "dialogue_draft", "dialogue_approved"):
             c.status = "frames_draft"
         c.updated_at = _now()
         s.add(c)
