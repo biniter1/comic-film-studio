@@ -4,6 +4,16 @@ import { AppShell } from "./layout/AppShell";
 import { JobsPage } from "./pages/JobsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { PlaceholderPage } from "./pages/PlaceholderPage";
+import { ProjectDetailPage, ProjectsPage } from "./pages/ProjectsPage";
+import { ImportPage } from "./pages/ImportPage";
+import { FramesPage } from "./pages/FramesPage";
+import { lastChapter } from "./api/studio";
+
+/** Sidebar shortcuts open the last chapter you worked on (or the project list). */
+function LastChapter({ to }: { to: "import" | "frames" }) {
+  const cid = lastChapter();
+  return <Navigate to={cid ? `/chapters/${cid}/${to}` : "/projects"} replace />;
+}
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -20,37 +30,13 @@ export function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<AppShell />}>
-            <Route index element={<Navigate to="/jobs" replace />} />
-            <Route
-              path="projects"
-              element={
-                <PlaceholderPage
-                  title="Dự án"
-                  phase="Phase 1"
-                  description="Quản lý danh sách dự án, chapter và tiến độ tổng quan"
-                />
-              }
-            />
-            <Route
-              path="import"
-              element={
-                <PlaceholderPage
-                  title="Nhập chapter"
-                  phase="Phase 1"
-                  description="Tải ảnh từ URL hoặc kéo thả thư mục ảnh truyện tranh"
-                />
-              }
-            />
-            <Route
-              path="frames"
-              element={
-                <PlaceholderPage
-                  title="Khung tranh"
-                  phase="Phase 1"
-                  description="Ghép dải dọc, cắt khung tự động và chỉnh tay gộp/tách khung"
-                />
-              }
-            />
+            <Route index element={<Navigate to="/projects" replace />} />
+            <Route path="projects" element={<ProjectsPage />} />
+            <Route path="projects/:pid" element={<ProjectDetailPage />} />
+            <Route path="chapters/:cid/import" element={<ImportPage />} />
+            <Route path="chapters/:cid/frames" element={<FramesPage />} />
+            <Route path="import" element={<LastChapter to="import" />} />
+            <Route path="frames" element={<LastChapter to="frames" />} />
             <Route
               path="script"
               element={
@@ -103,7 +89,7 @@ export function App() {
             />
             <Route path="jobs" element={<JobsPage />} />
             <Route path="settings" element={<SettingsPage />} />
-            <Route path="*" element={<Navigate to="/jobs" replace />} />
+            <Route path="*" element={<Navigate to="/projects" replace />} />
           </Route>
         </Routes>
       </BrowserRouter>

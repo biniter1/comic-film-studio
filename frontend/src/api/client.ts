@@ -111,6 +111,7 @@ export async function request<T>(path: string, options?: RequestInit): Promise<T
 }
 
 export const api = {
+  getJob: (id: string) => request<Job>(`/jobs/${id}`),
   getJobs: (status?: string) =>
     request<Job[]>(status ? `/jobs?status=${encodeURIComponent(status)}` : "/jobs"),
   createDemoJob: (payload?: { duration_s?: number; fail?: boolean; fail_category?: string }) =>

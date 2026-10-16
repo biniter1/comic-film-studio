@@ -295,7 +295,7 @@ Enum:
   "media": {"width": 1280, "height": 720, "duration_s": 5.0, "fps": 24, "has_audio": true}
 }
 ```
-`kind`: `page | frame | ref | keyframe | boundary_raw | boundary_fixed | take | tts | export`.
+`kind`: `page | page_preview | frame | ref | keyframe | boundary_raw | boundary_fixed | take | tts | export`.
 `approval`: `pending | approved | rejected`. **Không bao giờ tự xóa** asset đã duyệt hay take cũ.
 
 ### 5.5 `HandoffTask` (việc thủ công trên dịch vụ ngoài)
@@ -350,7 +350,8 @@ Enum:
 Kéo-thả nhiều ảnh hoặc chọn thư mục. Sắp xếp theo **tên tự nhiên** (`1, 2, 10`), cho phép kéo đổi thứ tự.
 
 ### 6.3 Ghép & cắt khung
-- Ghép dọc (resize về cùng chiều rộng) → `chapters/<id>/stitched.jpg`.
+- **Dải ảo** (không ghi 1 file ảnh khổng lồ — JPEG giới hạn 65 535px): mỗi trang được scale về cùng chiều rộng `W` (= `Chapter.strip_width`) và xếp chồng; trang có `y_offset` trên dải. Khung là khoảng `[y0, y1)` trên dải, được cắt bằng cách ghép các trang chồng lấn khoảng đó. UI hiển thị dải bằng các ảnh preview rộng 400px của từng trang xếp chồng.
+- Phát hiện gutter tính theo **từng hàng** nên làm theo từng trang rồi nối mask → khung vắt qua 2 trang tự liền lại.
 - Cắt tự động theo dải nền đồng màu (gutter): thuật toán trong `docs/reference/prototype/panels.py` (`split_image`, `_gutter_mask`, `_runs`, `_merge_close`). Đoạn vẽ liền > 2400px → chia nhỏ.
 - Mảnh quá thấp (< 160px, thường là dải chữ) → gộp vào mảnh kế.
 - **UI chỉnh tay** (bắt buộc, vì cắt tự động không hoàn hảo): xem dải dọc với các đường cắt; bấm giữa 2 khung để **gộp**; bấm vào 1 khung để **thêm đường cắt**; kéo đường cắt để chỉnh.
@@ -444,7 +445,8 @@ Vì composition là HTML thuần, **AI agent (Claude, Gemini, Antigravity) đọ
 | GET | `/chapters/{cid}` | Chi tiết + thống kê trạng thái |
 | POST | `/chapters/{cid}/import/url` | `{url}` → job `import_url` |
 | POST | `/chapters/{cid}/import/files` | multipart nhiều ảnh → job `import_local` |
-| GET/PATCH | `/chapters/{cid}/pages` | Danh sách / đổi thứ tự, đánh dấu bỏ |
+| GET/PATCH | `/chapters/{cid}/pages` | Danh sách / đổi thứ tự + bỏ trang: body `{pages: [{id, excluded}]}` gồm **đủ** mọi trang theo thứ tự mới. Đổi trang → xóa khung (asset giữ lại), chapter về `imported` |
+| GET | `/chapters/{cid}/import/report` | Kết quả lần nhập gần nhất: `added`, `rejected` (lý do), `duplicates` |
 | POST | `/chapters/{cid}/frames/auto` | Job `stitch_and_cut` |
 | GET/PUT | `/chapters/{cid}/frames` | Lấy / ghi lại toàn bộ đường cắt (`[{y0,y1,x0,x1}]`) |
 | POST | `/chapters/{cid}/frames/approve` | Duyệt khung |
@@ -485,7 +487,7 @@ Mã HTTP: 400 dữ liệu sai, 404 không tồn tại, 409 xung đột trạng t
     bible.json                      bản xuất của Story Bible (nguồn chính vẫn là DB)
     chapters/<chapter_id>/
       pages/        001.jpg …
-      stitched.jpg
+      import_report.json
       frames/       F001.png …
       analysis/     read_*.json, plan.json, shots_*.json, rule_notes.json, raw/…
       keyframes/<SHOT>/  v1.png v2.png …
