@@ -29,7 +29,8 @@ def save(img: Image.Image, path: Path, fmt: str = "PNG") -> Path:
 
 def two_pages_with_split_panel(tmp: Path) -> list[Path]:
     """Page 1: panel A (400) | white gutter | panel B top half (300, touches bottom edge)
-    Page 2: panel B bottom half (300, touches top edge) | black gutter | text band (60) | white | panel C (500)
+    Page 2: panel B bottom half (300, touches top edge) | black gutter | text band (60)
+            | white | panel C (500)
     Expected frames: A, B (reassembled across pages), C (with the text band merged in)."""
     p1 = page([gutter(30), noise_block(400, seed=1), gutter(50), noise_block(300, seed=2)])
     p2 = page(
