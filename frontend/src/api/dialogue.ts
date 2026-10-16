@@ -111,11 +111,17 @@ export interface UnitInfo {
   size?: number;
 }
 
+export interface ReadProgress {
+  succeeded: number;
+  total: number;
+}
+
 export interface DialogueData {
   chapter_id: string;
   project_id: string;
   status: string;
   busy_job_id: string | null;
+  read_progress?: ReadProgress;
   frames: DialogueFrame[];
   lines: DialogueLine[];
   characters: Character[];
@@ -152,15 +158,19 @@ const json = (body: unknown): RequestInit => ({ body: JSON.stringify(body) });
 
 export const dialogueApi = {
   get: (cid: string) => request<DialogueData>(`/chapters/${cid}/dialogue`),
-  startApi: (cid: string, stage: Stage) =>
+  startApi: (cid: string, stage: Stage, options?: { force_all?: boolean; then_dialogue?: boolean }) =>
     request<{ jobs: Job[] }>(`/chapters/${cid}/analysis/${stage}`, {
       method: "POST",
-      ...json({ mode: "api" }),
+      ...json({
+        mode: "api",
+        then_dialogue: options?.then_dialogue ?? true,
+        force_all: options?.force_all ?? false,
+      }),
     }),
-  startManual: (cid: string, stage: Stage) =>
+  startManual: (cid: string, stage: Stage, options?: { force_all?: boolean }) =>
     request<{ units: UnitInfo[] }>(`/chapters/${cid}/analysis/${stage}`, {
       method: "POST",
-      ...json({ mode: "manual" }),
+      ...json({ mode: "manual", force_all: options?.force_all ?? false }),
     }),
   units: (cid: string, stage: Stage) => request<UnitInfo[]>(`/chapters/${cid}/analysis/${stage}/units`),
   bundleUrl: (cid: string, stage: Stage, unit: number) =>

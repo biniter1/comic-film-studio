@@ -114,7 +114,7 @@ def test_user_edit_survives_rerun_and_edit_reopens_draft(c):
 
     n_calls = len(fake.calls)
     script.polish = lambda t: t + " (AI v2)"
-    r = c.post(f"/api/chapters/{cid}/analysis/dialogue", json={"mode": "api"})
+    r = c.post(f"/api/chapters/{cid}/analysis/dialogue", json={"mode": "api", "force_all": True})
     assert wait_job(c, r.json()["jobs"][0]["id"])["status"] == "succeeded"
     # the user line was not even sent as a target
     sent = json.loads(fake.calls[n_calls].user_text)
@@ -191,10 +191,11 @@ def test_frame_changes_vs_script(c):
     assert [x["source_frame_id"] for x in d["lines"]] == frames[1:]
     assert d["lines"][0]["anchor_frame_id"] == frames[2]
     assert [x["order"] for x in d["lines"]] == [1, 2]
-    # a changed range invalidates the analysis
+    # a changed range removes only the affected frame's lines; unaffected frames and status survive
     changed = [dict(ranges[1], y1=ranges[1]["y1"] - 10), ranges[2]]
     d = put(changed)
-    assert d["status"] == "frames_draft" and d["lines"] == []
+    assert d["status"] == "dialogue_draft"
+    assert [x["source_frame_id"] for x in d["lines"]] == [frames[2]]
 
 
 def test_glossary_merge_and_character_merge(c):

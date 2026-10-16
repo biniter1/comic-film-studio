@@ -93,11 +93,34 @@ def get_dialogue(cid: str) -> dict[str, Any]:
         runs = s.exec(select(AnalysisRun).where(AnalysisRun.chapter_id == cid)).all()
         busy = active_chapter_job(s, cid)
         pending_review = sum(1 for d in lines if d.needs_review and not d.reviewed)
+        r_units = stages.read_units(cid)
+        total_read_units = len(r_units)
+        succeeded_read_units = 0
+        for idx, targets in enumerate(r_units):
+            matching_run = next(
+                (
+                    r
+                    for r in runs
+                    if r.stage == "read"
+                    and r.unit_index == idx
+                    and r.status == "succeeded"
+                    and (r.payload or {}).get("targets") == targets
+                ),
+                None,
+            )
+            if matching_run:
+                succeeded_read_units += 1
+
+        read_progress = {
+            "succeeded": succeeded_read_units,
+            "total": total_read_units,
+        }
         return {
             "chapter_id": cid,
             "project_id": ch.project_id,
             "status": ch.status,
             "busy_job_id": busy,
+            "read_progress": read_progress,
             "frames": [
                 {
                     "id": f.id,

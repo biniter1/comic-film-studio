@@ -6,6 +6,7 @@ by the API provider (job) or pasted by the user (manual mode) — both go throug
 """
 
 import json
+import shutil
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -104,7 +105,29 @@ def _set_status(cid: str, status: str) -> None:
 # ===========================================================================
 def read_units(cid: str) -> list[list[str]]:
     with _session() as s:
-        ids = [f.id for f in _frames(s, cid)]
+        frames = _frames(s, cid)
+        ids = [f.id for f in frames]
+        if not ids:
+            return []
+
+        runs = s.exec(
+            select(AnalysisRun)
+            .where(AnalysisRun.chapter_id == cid, AnalysisRun.stage == "read")
+            .order_by(AnalysisRun.unit_index)
+        ).all()
+
+        id_set = set(ids)
+        if runs and all((r.payload or {}).get("targets") for r in runs):
+            all_prev_targets = [fid for r in runs for fid in (r.payload or {}).get("targets", [])]
+            # If current frames are a subset of previous targets (removal only, no new frame IDs):
+            if set(ids) <= set(all_prev_targets):
+                units = []
+                for r in runs:
+                    t = [fid for fid in (r.payload or {}).get("targets", []) if fid in id_set]
+                    if t:
+                        units.append(t)
+                return units
+
     return [ids[i : i + READ_BATCH] for i in range(0, len(ids), READ_BATCH)]
 
 
@@ -112,6 +135,9 @@ def reset_dialogue(cid: str) -> int:
     """Start a fresh read: back up existing lines, then delete them and old runs."""
     with _session() as s:
         ch = _chapter(s, cid)
+        cache = work_dir(ch) / "cache"
+        if cache.exists():
+            shutil.rmtree(cache, ignore_errors=True)
         lines = list(s.exec(select(DialogueLine).where(DialogueLine.chapter_id == cid)))
         if lines:
             hist = work_dir(ch) / "history"
@@ -273,7 +299,11 @@ def apply_read_unit(
             status="succeeded",
             attempts=attempts,
             ih=ih,
-            payload={"targets": targets, "summary": out.running_summary},
+            payload={
+                "targets": targets,
+                "summary": out.running_summary,
+                "output": out.model_dump(mode="json"),
+            },
         )
         s.commit()
 
@@ -350,12 +380,24 @@ def recompute_anchors(s: Session, cid: str) -> None:
 # DIALOGUE (polish)
 # ===========================================================================
 def _polish_targets(s: Session, cid: str) -> list[DialogueLine]:
+    processed_line_ids: set[str] = set()
+    for r in s.exec(
+        select(AnalysisRun).where(
+            AnalysisRun.chapter_id == cid,
+            AnalysisRun.stage == "dialogue",
+            AnalysisRun.status == "succeeded",
+        )
+    ):
+        processed_line_ids.update((r.payload or {}).get("targets", []))
+
     return [
         d
         for d in s.exec(
             select(DialogueLine).where(DialogueLine.chapter_id == cid).order_by(DialogueLine.order)
         )
-        if d.kind in POLISHABLE_KINDS and d.edited_by != "user"
+        if d.kind in POLISHABLE_KINDS
+        and d.edited_by != "user"
+        and (d.edited_by == "none" and d.id not in processed_line_ids)
     ]
 
 
@@ -494,8 +536,41 @@ def apply_dialogue_unit(
         merge_glossary_candidates(s, ch.project_id, cid, out.glossary_candidates)
         merge_address_candidates(s, ch.project_id, out.address_candidates)
         _upsert_run(
-            s, cid, "dialogue", unit_index, mode=mode, status="succeeded", attempts=attempts, ih=ih
+            s,
+            cid,
+            "dialogue",
+            unit_index,
+            mode=mode,
+            status="succeeded",
+            attempts=attempts,
+            ih=ih,
+            payload={
+                "targets": list(edits),
+                "output": out.model_dump(mode="json"),
+            },
         )
+        s.commit()
+
+
+def reset_dialogue_runs(cid: str) -> None:
+    """Clear dialogue runs and reset AI edited lines to none (keep user edits)."""
+    with _session() as s:
+        ch = _chapter(s, cid)
+        cache = work_dir(ch) / "cache"
+        if cache.exists():
+            shutil.rmtree(cache, ignore_errors=True)
+        for r in s.exec(
+            select(AnalysisRun).where(
+                AnalysisRun.chapter_id == cid, AnalysisRun.stage == "dialogue"
+            )
+        ):
+            s.delete(r)
+        for d in s.exec(select(DialogueLine).where(DialogueLine.chapter_id == cid)):
+            if d.edited_by == "ai":
+                d.edited_by = "none"
+                d.text = d.text_raw
+                d.edit_note = None
+                s.add(d)
         s.commit()
 
 
@@ -526,20 +601,36 @@ STAGES = {
 }
 
 
-def prepare_manual(cid: str, stage: str) -> list[dict[str, Any]]:
+def prepare_manual(cid: str, stage: str, force_all: bool = False) -> list[dict[str, Any]]:
     units_fn = STAGES[stage][0]
-    if stage == "read":
+    if stage == "read" and force_all:
         reset_dialogue(cid)
+    elif stage == "dialogue" and force_all:
+        reset_dialogue_runs(cid)
     units = units_fn(cid)
     if not units:
         raise AppError("NOTHING_TO_ANALYZE", "Không có gì để phân tích ở bước này", status_code=409)
     with _session() as s:
-        for r in s.exec(
-            select(AnalysisRun).where(AnalysisRun.chapter_id == cid, AnalysisRun.stage == stage)
-        ):
-            s.delete(r)
-        s.flush()
+        if force_all:
+            for r in s.exec(
+                select(AnalysisRun).where(AnalysisRun.chapter_id == cid, AnalysisRun.stage == stage)
+            ):
+                s.delete(r)
+            s.flush()
         for i, targets in enumerate(units):
+            existing = s.exec(
+                select(AnalysisRun).where(
+                    AnalysisRun.chapter_id == cid,
+                    AnalysisRun.stage == stage,
+                    AnalysisRun.unit_index == i,
+                )
+            ).first()
+            if (
+                existing
+                and existing.status == "succeeded"
+                and (existing.payload or {}).get("targets") == targets
+            ):
+                continue
             _upsert_run(
                 s,
                 cid,

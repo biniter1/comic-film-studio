@@ -54,7 +54,8 @@ export function DialoguePage() {
   // --- jobs ------------------------------------------------------------------
   const [jobIds, setJobIds] = useState<string[]>([]);
   const start = useMutation({
-    mutationFn: (stage: Stage) => dialogueApi.startApi(cid, stage),
+    mutationFn: ({ stage, force_all }: { stage: Stage; force_all?: boolean }) =>
+      dialogueApi.startApi(cid, stage, { force_all }),
     onSuccess: (r) => {
       setJobIds(r.jobs.map((j) => j.id));
       setManual(null);
@@ -74,9 +75,10 @@ export function DialoguePage() {
   // --- manual mode ---------------------------------------------------------------
   const [manual, setManual] = useState<Stage | null>(null);
   const startManual = useMutation({
-    mutationFn: (stage: Stage) => dialogueApi.startManual(cid, stage),
-    onSuccess: (_r, stage) => {
-      setManual(stage);
+    mutationFn: ({ stage, force_all }: { stage: Stage; force_all?: boolean }) =>
+      dialogueApi.startManual(cid, stage, { force_all }),
+    onSuccess: (_r, vars) => {
+      setManual(vars.stage);
       refresh();
     },
   });
@@ -102,11 +104,22 @@ export function DialoguePage() {
   const frameById = useMemo(() => new Map((d?.frames ?? []).map((f) => [f.id, f])), [d]);
   const ch = chapter.data;
   const pending = d?.stats.pending_review ?? 0;
-  const confirmReread = () =>
-    !hasScript ||
-    window.confirm(
-      "Đọc lại sẽ thay toàn bộ kịch bản thoại hiện tại (bản cũ được sao lưu trong analysis/history). Tiếp tục?"
-    );
+  const readProgress = d?.read_progress;
+  const totalUnits = readProgress?.total ?? 0;
+  const succeededUnits = readProgress?.succeeded ?? 0;
+
+  const handleRereadAll = () => {
+    const est = totalUnits || 1;
+    if (window.confirm(`Sẽ gọi AI lại cho tất cả ${totalUnits} gói, ước tính ~${est} credit. Tiếp tục?`)) {
+      start.mutate({ stage: "read", force_all: true });
+    }
+  };
+
+  const handleRepolishAll = () => {
+    if (window.confirm("Sẽ gọi AI biên tập lại toàn bộ câu thoại (trừ câu bạn đã sửa tay). Tiếp tục?")) {
+      start.mutate({ stage: "dialogue", force_all: true });
+    }
+  };
 
   return (
     <div className="p-8">
@@ -119,6 +132,14 @@ export function DialoguePage() {
                 ← Khung
               </Link>
               {status && <StatusBadge status={status as never} />}
+              {totalUnits > 0 && (
+                <span
+                  className="text-xs font-semibold px-2 py-0.5 rounded bg-gray-800 text-sky-300 border border-gray-700"
+                  data-testid="read-progress-badge"
+                >
+                  Đã đọc {succeededUnits}/{totalUnits} gói
+                </span>
+              )}
               {d && d.stats.lines > 0 && (
                 <span data-testid="dialogue-stats">
                   {d.stats.lines} câu · AI sửa {d.stats.edited_ai} · bạn sửa {d.stats.edited_user}
@@ -139,20 +160,48 @@ export function DialoguePage() {
             <Button
               variant="primary"
               disabled={!canAnalyze || busy || start.isPending}
-              onClick={() => confirmReread() && start.mutate("read")}
+              onClick={() => start.mutate({ stage: "read", force_all: false })}
               data-testid="analyze-btn"
-              title="Đọc từng khung, bóc thoại, đoán người nói, rồi biên tập lại toàn bộ thoại"
+              title="Chạy tiếp các gói còn thiếu (không gọi lại phần việc đã xong)"
             >
-              <Sparkles className="w-4 h-4" /> {hasScript ? "Phân tích lại" : "Phân tích bằng Gemini"}
+              <Sparkles className="w-4 h-4" />{" "}
+              {succeededUnits > 0 && succeededUnits < totalUnits
+                ? "Chạy tiếp"
+                : succeededUnits > 0 && succeededUnits === totalUnits
+                ? "Phân tích"
+                : hasScript
+                ? "Phân tích lại"
+                : "Phân tích bằng Gemini"}
             </Button>
-            {hasScript && (
+            {(succeededUnits > 0 || hasScript) && (
               <Button
-                disabled={busy || start.isPending}
-                onClick={() => start.mutate("dialogue")}
-                title="Chỉ chạy lại bước biên tập (giữ nguyên các câu bạn đã sửa tay)"
+                disabled={!canAnalyze || busy || start.isPending}
+                onClick={handleRereadAll}
+                data-testid="reread-all-btn"
+                title="Xóa kết quả cũ và gọi AI đọc lại toàn bộ các gói"
               >
-                <Wand2 className="w-4 h-4" /> Biên tập lại
+                <RotateCcw className="w-4 h-4" /> Đọc lại toàn bộ (tốn credit)
               </Button>
+            )}
+            {hasScript && (
+              <>
+                <Button
+                  disabled={busy || start.isPending}
+                  onClick={() => start.mutate({ stage: "dialogue", force_all: false })}
+                  title="Chỉ gửi các câu chưa có bản biên tập (chưa từng được AI xử lý) hoặc câu mới"
+                  data-testid="dialogue-btn"
+                >
+                  <Wand2 className="w-4 h-4" /> Biên tập
+                </Button>
+                <Button
+                  disabled={busy || start.isPending}
+                  onClick={handleRepolishAll}
+                  title="Biên tập lại toàn bộ câu thoại (không đụng câu bạn đã sửa tay)"
+                  data-testid="repolish-all-btn"
+                >
+                  <RotateCcw className="w-4 h-4" /> Biên tập lại toàn bộ
+                </Button>
+              </>
             )}
             <Button
               disabled={!canAnalyze || busy}
@@ -220,7 +269,7 @@ export function DialoguePage() {
             setStage={setManual}
             units={d.units[manual]}
             hasScript={hasScript}
-            onStart={(s) => (s === "read" ? confirmReread() : true) && startManual.mutate(s)}
+            onStart={(s) => startManual.mutate({ stage: s, force_all: false })}
             starting={startManual.isPending}
             onDone={refresh}
           />
