@@ -37,7 +37,7 @@ def _run_stage(ctx: JobContext, stage: str) -> None:
     provider = _provider()
     wd = _work_dir(cid)
     units = units_fn(cid)
-    label = "khung" if stage == "read" else "câu"
+    label = {"read": "khung", "dialogue": "câu", "plan": "khung", "shots": "khung"}[stage]
     ctx.log(f"{stage}: {len(units)} phần việc, provider={provider.name}")
 
     with Session(db.engine) as s:
@@ -246,3 +246,29 @@ def handle_character_profile(ctx: JobContext) -> None:
             s.commit()
 
     ctx.report_progress(1.0, "Đã tạo bản đề xuất hồ sơ ngoại hình")
+
+
+@job_handler("analysis_plan")
+def handle_plan(ctx: JobContext) -> None:
+    from app.analysis import shots as shots_mod
+
+    cid = ctx.payload["chapter_id"]
+    try:
+        shots_mod.assert_plannable(cid)
+        if ctx.payload.get("force_all"):
+            shots_mod.reset_plan(cid)
+            ctx.log("Đã xóa kế hoạch shot cũ (lập lại toàn bộ)")
+    except AppError as e:
+        raise JobError("permanent", e.message_vi) from e
+    _run_stage(ctx, "plan")
+
+
+@job_handler("analysis_shots")
+def handle_shots(ctx: JobContext) -> None:
+    from app.analysis import shots as shots_mod
+
+    try:
+        shots_mod.assert_plannable(ctx.payload["chapter_id"])
+    except AppError as e:
+        raise JobError("permanent", e.message_vi) from e
+    _run_stage(ctx, "shots")

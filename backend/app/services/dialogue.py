@@ -65,7 +65,7 @@ def _touch_draft(s: Session, ch: Chapter) -> None:
 def _editable(s: Session, cid: str) -> Chapter:
     ch = _chapter(s, cid)
     _assert_chapter_idle(s, cid)
-    if ch.status not in ("dialogue_draft", "dialogue_approved"):
+    if ch.status not in ("dialogue_draft", "dialogue_approved", "shots_draft", "plan_approved"):
         raise AppError(
             "DIALOGUE_NOT_READY",
             "Chưa có kịch bản thoại — hãy chạy phân tích trước",

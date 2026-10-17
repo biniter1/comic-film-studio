@@ -21,14 +21,16 @@ from app.services import studio
 
 router = APIRouter(tags=["analysis"])
 
-Stage = Literal["read", "dialogue"]
-ANALYSIS_JOBS = ("analysis_read", "analysis_dialogue")
+Stage = Literal["read", "dialogue", "plan", "shots"]
+ANALYSIS_JOBS = ("analysis_read", "analysis_dialogue", "analysis_plan", "analysis_shots")
 
 
 class AnalysisIn(BaseModel):
     mode: Literal["api", "manual"] = "api"
     # read via API: also queue the dialogue polish right after it (default)
     then_dialogue: bool = True
+    # plan via API: also queue the per-scene shots right after it (default)
+    then_shots: bool = True
     force_all: bool = False
 
 
@@ -55,8 +57,39 @@ def _cancel_orphans(cid: str) -> None:
         job_service.cancel(jid)
 
 
+def _start_shots(cid: str, stage: str, body: AnalysisIn) -> dict[str, Any]:
+    from app.analysis import shots as shots_mod
+
+    shots_mod.assert_plannable(cid)
+    _cancel_orphans(cid)
+    studio.assert_chapter_idle(cid)
+    if stage == "shots" and not shots_mod.shots_units(cid):
+        raise AppError("PLAN_FIRST", "Chạy bước lập scene trước", status_code=409)
+    if body.force_all and stage == "plan":
+        shots_mod.reset_plan(cid)
+    if body.mode == "manual":
+        return {"mode": "manual", "stage": stage, "units": stages.prepare_manual(cid, stage)}
+    jobs = []
+    if stage == "plan":
+        plan = job_service.enqueue("analysis_plan", {"chapter_id": cid})
+        jobs.append(plan)
+        if body.then_shots:
+            jobs.append(
+                job_service.enqueue("analysis_shots", {"chapter_id": cid}, depends_on=[plan.id])
+            )
+    else:
+        jobs.append(job_service.enqueue("analysis_shots", {"chapter_id": cid}))
+    return {
+        "mode": "api",
+        "stage": stage,
+        "jobs": [JobRead.model_validate(j).model_dump(mode="json") for j in jobs],
+    }
+
+
 @router.post("/chapters/{cid}/analysis/{stage}")
 def start_analysis(cid: str, stage: Stage, body: AnalysisIn) -> dict[str, Any]:
+    if stage in ("plan", "shots"):
+        return _start_shots(cid, stage, body)
     ch = stages.assert_analyzable(cid)
     _cancel_orphans(cid)
     studio.assert_chapter_idle(cid)
@@ -460,3 +493,62 @@ def merge_character(chid: str, body: MergeIn) -> dict[str, Any]:
 @router.post("/characters/{chid}/apply-proposal")
 def apply_proposal(chid: str, body: ApplyProposalIn) -> dict[str, Any]:
     return svc.apply_proposal(chid, body.fields)
+
+
+# --- shots (Phase 2c) -------------------------------------------------------------
+class CameraIn(BaseModel):
+    shot_size: Optional[str] = None
+    movement: Optional[str] = None
+    speed: Optional[str] = None
+    angle: Optional[str] = None
+
+
+class ShotPatch(BaseModel):
+    transition_in: Optional[Literal["cut", "continuous", "match"]] = None
+    duration_s: Optional[float] = Field(default=None, gt=0, le=15)
+    camera: Optional[dict[str, Any]] = None
+    location_key: Optional[str] = None
+    blocking: Optional[list[dict[str, Any]]] = None
+    beats: Optional[list[dict[str, Any]]] = None
+    start_state: Optional[str] = Field(default=None, max_length=1000)
+    end_state: Optional[str] = Field(default=None, max_length=1000)
+    action: Optional[str] = Field(default=None, max_length=1000)
+    emotion: Optional[str] = Field(default=None, max_length=200)
+    sfx_notes: Optional[str] = Field(default=None, max_length=500)
+    prompt_override: Optional[dict[str, Optional[str]]] = None
+
+
+@router.get("/chapters/{cid}/shots")
+def get_shots(cid: str) -> dict[str, Any]:
+    from app.analysis import shots as shots_mod
+
+    return shots_mod.get_shots(cid)
+
+
+@router.patch("/shots/{sid}")
+def patch_shot(sid: str, body: ShotPatch) -> dict[str, Any]:
+    from app.analysis import shots as shots_mod
+    from app.analysis.schemas import BeatOut, BlockingOut, CameraOut
+
+    patch = body.model_dump(exclude_unset=True)
+    try:  # same normalisation/validation as AI output
+        if patch.get("camera") is not None:
+            patch["camera"] = CameraOut.model_validate(patch["camera"]).model_dump()
+        if patch.get("blocking") is not None:
+            patch["blocking"] = [
+                BlockingOut.model_validate(b).model_dump() for b in patch["blocking"]
+            ]
+        if patch.get("beats") is not None:
+            patch["beats"] = [BeatOut.model_validate(b).model_dump() for b in patch["beats"]]
+    except ValueError as e:
+        raise AppError(
+            "VALIDATION_FAILED", "Dữ liệu shot không hợp lệ", {"error": str(e)[:500]}, 422
+        )
+    return shots_mod.update_shot(sid, patch)
+
+
+@router.post("/chapters/{cid}/shots/approve-plan")
+def approve_plan(cid: str) -> dict[str, Any]:
+    from app.analysis import shots as shots_mod
+
+    return shots_mod.approve_plan(cid)

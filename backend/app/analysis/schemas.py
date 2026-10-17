@@ -317,3 +317,201 @@ class DialogueOut(BaseModel):
     lines: list[DialogueEdit]
     glossary_candidates: list[GlossaryCandidate] = []
     address_candidates: list[AddressCandidate] = []
+
+
+# ---------------------------------------------------------------------------
+# Phase 2c: plan (scenes) + shots (storyboard) — SPEC §4.6, §5.3
+# ---------------------------------------------------------------------------
+ShotSize = Literal[
+    "extreme_wide",
+    "wide",
+    "full",
+    "medium",
+    "medium_close_up",
+    "close_up",
+    "extreme_close_up",
+    "insert",
+]
+Movement = Literal[
+    "static",
+    "push_in",
+    "pull_out",
+    "pan_left",
+    "pan_right",
+    "tilt_up",
+    "tilt_down",
+    "truck_left",
+    "truck_right",
+    "orbit_left",
+    "orbit_right",
+    "follow",
+    "crane_up",
+    "crane_down",
+    "handheld_shake",
+    "crash_zoom",
+]
+Speed = Literal["slow", "medium", "fast"]
+Angle = Literal["eye", "low", "high", "overhead", "dutch"]
+Transition = Literal["cut", "continuous", "match"]
+ScreenPos = Literal["left", "center", "right"]
+Depth = Literal["fg", "mg", "bg"]
+Facing = Literal["left", "right", "camera", "away"]
+
+_SYNONYMS = {
+    "shot_size": {
+        "ews": "extreme_wide",
+        "ws": "wide",
+        "long": "wide",
+        "establishing": "extreme_wide",
+        "ms": "medium",
+        "mcu": "medium_close_up",
+        "cu": "close_up",
+        "closeup": "close_up",
+        "ecu": "extreme_close_up",
+        "extreme_closeup": "extreme_close_up",
+        "detail": "insert",
+        "full_shot": "full",
+        "medium_shot": "medium",
+        "wide_shot": "wide",
+    },
+    "movement": {
+        "none": "static",
+        "still": "static",
+        "dolly_in": "push_in",
+        "zoom_in": "push_in",
+        "dolly_out": "pull_out",
+        "zoom_out": "pull_out",
+        "orbit": "orbit_right",
+        "arc": "orbit_right",
+        "tracking": "follow",
+        "track": "follow",
+        "shake": "handheld_shake",
+        "handheld": "handheld_shake",
+        "crane": "crane_up",
+        "pan": "pan_right",
+        "tilt": "tilt_up",
+    },
+    "angle": {
+        "eye_level": "eye",
+        "low_angle": "low",
+        "high_angle": "high",
+        "top_down": "overhead",
+        "birds_eye": "overhead",
+        "dutch_angle": "dutch",
+    },
+    "speed": {"normal": "medium", "moderate": "medium", "quick": "fast"},
+    "transition_in": {"hard_cut": "cut", "continue": "continuous", "match_cut": "match"},
+    "screen_pos": {"middle": "center", "centre": "center"},
+    "depth": {"foreground": "fg", "midground": "mg", "middle": "mg", "background": "bg"},
+    "facing": {"viewer": "camera", "front": "camera", "back": "away", "toward_camera": "camera"},
+}
+
+
+def _norm(field: str, v: Any) -> Any:
+    s = _clean_enum_str(v)
+    if not isinstance(s, str):
+        return s
+    return _SYNONYMS.get(field, {}).get(s, s)
+
+
+class SceneDraft(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    frame_ids: list[str] = Field(min_length=1)
+    summary: str = ""
+    location_key: Optional[str] = None
+    mood: Optional[str] = None
+
+
+class NewLocation(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    key: str = Field(pattern=r"^[a-z0-9_]+$")
+    name_vi: str
+    location_lock: Optional[str] = None
+
+
+class PlanOut(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    scenes: list[SceneDraft] = Field(min_length=1)
+    new_locations: list[NewLocation] = []
+
+
+class CameraOut(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    shot_size: ShotSize = "medium"
+    movement: Movement = "static"
+    speed: Speed = "slow"
+    angle: Angle = "eye"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _loose(cls, v: Any) -> Any:
+        if isinstance(v, dict):
+            v = dict(v)
+            for k in ("shot_size", "movement", "speed", "angle"):
+                if v.get(k) is None:
+                    v.pop(k, None)
+                else:
+                    v[k] = _norm(k, v[k])
+            if isinstance(v.get("movement"), list):  # model listed several → keep the first
+                v["movement"] = _norm("movement", v["movement"][0]) if v["movement"] else "static"
+        return v
+
+
+class BlockingOut(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    character_key: str
+    outfit_key: Optional[str] = None
+    screen_pos: ScreenPos = "center"
+    depth: Depth = "mg"
+    facing: Facing = "camera"
+    pose: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _loose(cls, v: Any) -> Any:
+        if isinstance(v, dict):
+            v = dict(v)
+            for k in ("screen_pos", "depth", "facing"):
+                if v.get(k) is None:
+                    v.pop(k, None)
+                else:
+                    v[k] = _norm(k, v[k])
+        return v
+
+
+class BeatOut(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    t0: float = Field(ge=0)
+    t1: float = Field(gt=0)
+    action: str = Field(min_length=1)
+
+
+class ShotDraft(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    frame_ids: list[str] = []
+    inserted: bool = False
+    transition_in: Transition = "cut"
+    duration_s: float = Field(default=4.0, gt=0, le=15)
+    camera: CameraOut = CameraOut()
+    location_key: Optional[str] = None
+    blocking: list[BlockingOut] = []
+    beats: list[BeatOut] = []
+    start_state: str = ""
+    end_state: str = ""
+    action: str = ""
+    emotion: str = ""
+    line_ids: list[str] = []
+    sfx_notes: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _loose(cls, v: Any) -> Any:
+        if isinstance(v, dict) and v.get("transition_in") is not None:
+            v = dict(v)
+            v["transition_in"] = _norm("transition_in", v["transition_in"])
+        return v
+
+
+class ShotsOut(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    shots: list[ShotDraft] = Field(min_length=1)

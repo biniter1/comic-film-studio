@@ -10,6 +10,7 @@ from app.models.analysis import (
 )
 from app.models.job import Job
 from app.models.project import Asset, Chapter, Frame, Project, SourcePage
+from app.models.shots import Scene, Shot
 
 __all__ = [
     "Job",
@@ -26,4 +27,6 @@ __all__ = [
     "GlossaryTerm",
     "AddressRule",
     "AnalysisRun",
+    "Scene",
+    "Shot",
 ]
