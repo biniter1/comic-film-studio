@@ -60,6 +60,8 @@ const BADGE: Record<ChapterStatus, string> = {
   analyzing: "bg-violet-900/60 text-violet-200",
   dialogue_draft: "bg-amber-900/60 text-amber-200",
   dialogue_approved: "bg-emerald-900/60 text-emerald-200",
+  shots_draft: "bg-amber-900/60 text-amber-200",
+  plan_approved: "bg-emerald-900/60 text-emerald-200",
 };
 
 export function StatusBadge({ status }: { status: ChapterStatus }) {

@@ -189,7 +189,7 @@ export interface AddressRule {
   status: ReviewStatus;
 }
 
-export type Stage = "read" | "dialogue";
+export type Stage = "read" | "dialogue" | "plan" | "shots";
 
 export type LinePatch = Partial<
   Pick<DialogueLine, "text" | "speaker_key" | "speaker_label" | "kind" | "reviewed" | "speaker_suggestion">
