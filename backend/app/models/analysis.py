@@ -26,6 +26,27 @@ class Character(SQLModel, table=True):
     height_class: str = "average"  # child | short | average | tall | giant
     ref_frame_ids: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     look_status: str = "draft"  # draft | approved
+    role: str = "supporting"  # main | supporting | extra
+    role_source: str = "ai"  # ai | user
+    is_group: bool = False
+    group_size_hint: Optional[str] = None
+    profile_proposal: Optional[dict[str, Any]] = Field(default=None, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class CharacterRef(SQLModel, table=True):
+    __tablename__ = "character_refs"
+
+    id: str = Field(default_factory=lambda: new_id("RF"), primary_key=True)
+    character_id: str = Field(foreign_key="characters.id", index=True)
+    outfit_id: Optional[str] = Field(
+        default=None, foreign_key="character_outfits.id", index=True, nullable=True
+    )
+    asset_id: str = Field(foreign_key="assets.id")
+    source_frame_id: Optional[str] = Field(default=None, foreign_key="frames.id", nullable=True)
+    crop: Optional[dict[str, int]] = Field(default=None, sa_column=Column(JSON))
+    note: Optional[str] = None
+    order: int = 0
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -84,6 +105,9 @@ class DialogueLine(SQLModel, table=True):
     edit_note: Optional[str] = None
     needs_review: bool = False
     reviewed: bool = False
+    speaker_suggestion: Optional[dict[str, Any]] = Field(
+        default=None, sa_column=Column(JSON, nullable=True)
+    )
     shot_code: Optional[str] = None
     at_s: Optional[float] = None
     dur_s: Optional[float] = None

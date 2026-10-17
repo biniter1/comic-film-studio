@@ -37,7 +37,7 @@ import { Button, Empty, ErrorBox, JobProgress, PageHeader, StatusBadge } from ".
 const LOW_CONF = 0.7;
 const TERMINAL = ["succeeded", "failed", "cancelled"];
 
-type Filter = { review: boolean; speaker: string; frame: string };
+type Filter = { review: boolean; hasNote: boolean; speaker: string; frame: string };
 
 export function DialoguePage() {
   const { cid = "" } = useParams();
@@ -92,10 +92,14 @@ export function DialoguePage() {
   const reviewAll = useMutation({ mutationFn: () => dialogueApi.reviewAll(cid), onSuccess: refresh });
   const applyGlossary = useMutation({ mutationFn: () => dialogueApi.applyGlossary(cid), onSuccess: refresh });
 
-  const [filter, setFilter] = useState<Filter>({ review: false, speaker: "", frame: "" });
+  const [quickReviewOpen, setQuickReviewOpen] = useState(false);
+  const quickReviewCount = useMemo(() => (d?.lines ?? []).filter((l) => needsAttention(l)).length, [d]);
+
+  const [filter, setFilter] = useState<Filter>({ review: false, hasNote: false, speaker: "", frame: "" });
   const lines = useMemo(() => {
     let ls = d?.lines ?? [];
     if (filter.review) ls = ls.filter((l) => needsAttention(l));
+    if (filter.hasNote) ls = ls.filter((l) => Boolean(l.edit_note && l.edit_note.trim()));
     if (filter.speaker) ls = ls.filter((l) => (l.speaker_key ?? `label:${l.speaker_label ?? ""}`) === filter.speaker);
     if (filter.frame) ls = ls.filter((l) => l.source_frame_id === filter.frame || l.anchor_frame_id === filter.frame);
     return ls;
@@ -200,6 +204,15 @@ export function DialoguePage() {
             )}
             {hasScript && (
               <>
+                <Button
+                  onClick={() => setQuickReviewOpen(true)}
+                  disabled={busy || quickReviewCount === 0}
+                  data-testid="quick-review-btn"
+                  className="!bg-indigo-600 hover:!bg-indigo-500 text-white font-medium"
+                  title="Soát nhanh từng câu thoại cần lưu ý bằng bàn phím"
+                >
+                  <Sparkles className="w-4 h-4" /> Soát nhanh ({quickReviewCount} câu)
+                </Button>
                 <Button
                   disabled={busy || start.isPending}
                   onClick={() => start.mutate({ stage: "dialogue", force_all: false })}
@@ -317,6 +330,15 @@ export function DialoguePage() {
                 />
                 Chỉ câu cần soát
               </label>
+              <label className="flex items-center gap-1.5 text-gray-300">
+                <input
+                  type="checkbox"
+                  checked={filter.hasNote}
+                  onChange={(e) => setFilter((x) => ({ ...x, hasNote: e.target.checked }))}
+                  data-testid="filter-has-note"
+                />
+                Chỉ câu AI đổi nghĩa
+              </label>
               <select
                 className="bg-surface border border-border rounded px-2 py-1 text-sm"
                 value={filter.speaker}
@@ -357,12 +379,27 @@ export function DialoguePage() {
           </div>
         </div>
       )}
+      {d && (
+        <QuickReviewModal
+          isOpen={quickReviewOpen}
+          onClose={() => setQuickReviewOpen(false)}
+          lines={d.lines}
+          frames={d.frames}
+          characters={d.characters}
+          onApprove={() => approve.mutate()}
+          onChanged={refresh}
+        />
+      )}
     </div>
   );
 }
 
 function needsAttention(l: DialogueLine) {
-  return (l.needs_review && !l.reviewed) || (isSpoken(l.kind) && l.speaker_confidence < LOW_CONF);
+  return (
+    (l.needs_review && !l.reviewed) ||
+    (isSpoken(l.kind) && l.speaker_confidence < LOW_CONF) ||
+    Boolean(l.speaker_suggestion)
+  );
 }
 
 const isSpoken = (k: TextKind) => k === "dialogue" || k === "inner_thought";
@@ -472,6 +509,10 @@ function LineRow({
     onSuccess: onChanged,
   });
   const revert = useMutation({ mutationFn: () => dialogueApi.revertLine(line.id), onSuccess: onChanged });
+  const applySuggestion = useMutation({
+    mutationFn: () => dialogueApi.applySpeakerSuggestion(line.id),
+    onSuccess: onChanged,
+  });
 
   const lowConf = isSpoken(line.kind) && line.speaker_confidence < LOW_CONF;
   const flagged = line.needs_review && !line.reviewed;
@@ -600,8 +641,38 @@ function LineRow({
             </Button>
           )}
         </div>
-        {line.edit_note && <div className="text-[11px] text-amber-300/80">AI ghi chú: {line.edit_note}</div>}
-        <ErrorBox error={patch.error || revert.error} />
+        {line.edit_note && Boolean(line.edit_note.trim()) && (
+          <div className="text-[11px] text-amber-300/80" data-testid="line-edit-note">
+            AI ghi chú: {line.edit_note}
+          </div>
+        )}
+                {line.speaker_suggestion && (
+          <div
+            className="flex items-center justify-between gap-2 p-2 rounded bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200"
+            data-testid="speaker-suggestion-banner"
+          >
+            <span>
+              AI đề xuất:{" "}
+              <strong className="text-white">
+                {characters.find((c) => c.key === line.speaker_suggestion?.speaker_key)?.name ||
+                  line.speaker_suggestion.speaker_label ||
+                  line.speaker_suggestion.speaker_key ||
+                  "Chưa rõ"}
+              </strong>{" "}
+              — {line.speaker_suggestion.reason}
+            </span>
+            <button
+              type="button"
+              onClick={() => applySuggestion.mutate()}
+              disabled={disabled || applySuggestion.isPending}
+              className="px-2 py-0.5 rounded bg-amber-600 hover:bg-amber-500 text-white font-medium text-xs transition shrink-0"
+              data-testid="apply-speaker-suggestion"
+            >
+              Áp dụng
+            </button>
+          </div>
+        )}
+        <ErrorBox error={patch.error || revert.error || applySuggestion.error} />
       </div>
     </div>
   );
@@ -793,6 +864,496 @@ function PasteUnit({
       )}
       {!paste.error && unit.error && !done && (
         <pre className="text-[11px] text-red-300/80 whitespace-pre-wrap max-h-24 overflow-auto mt-1">{unit.error}</pre>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------------------
+function QuickReviewModal({
+  isOpen,
+  onClose,
+  lines,
+  frames,
+  characters,
+  onApprove,
+  onChanged,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  lines: DialogueLine[];
+  frames: DialogueFrame[];
+  characters: Character[];
+  onApprove: () => void;
+  onChanged: () => void;
+}) {
+  const [reviewLines, setReviewLines] = useState<DialogueLine[]>([]);
+  const [idx, setIdx] = useState(0);
+  const [isEditingText, setIsEditingText] = useState(false);
+  const [editText, setEditText] = useState("");
+
+  useEffect(() => {
+    if (isOpen) {
+      const needed = lines.filter((l) => needsAttention(l));
+      setReviewLines(needed);
+      setIdx(0);
+      setIsEditingText(false);
+    }
+  }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const currentLine = reviewLines[idx];
+  const isDone = reviewLines.length === 0 || idx >= reviewLines.length;
+
+  useEffect(() => {
+    if (currentLine) {
+      setEditText(currentLine.text);
+      setIsEditingText(false);
+    }
+  }, [currentLine?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const frameById = useMemo(() => new Map(frames.map((f) => [f.id, f])), [frames]);
+  const currentFrame = currentLine ? frameById.get(currentLine.source_frame_id) : undefined;
+
+  const frameCharKeys = currentFrame?.characters ?? [];
+  const inFrame = characters.filter((c) => frameCharKeys.includes(c.key));
+  const notInFrame = characters.filter((c) => !frameCharKeys.includes(c.key));
+  const orderedChars = useMemo(() => [...inFrame, ...notInFrame].slice(0, 9), [inFrame, notInFrame]);
+
+  const selectSpeaker = async (c: Character) => {
+    if (!currentLine) return;
+    setReviewLines((prev) =>
+      prev.map((l) =>
+        l.id === currentLine.id
+          ? { ...l, speaker_key: c.key, speaker_label: c.name, speaker_confidence: 1.0 }
+          : l
+      )
+    );
+    await dialogueApi.patchLine(currentLine.id, {
+      speaker_key: c.key,
+      speaker_label: c.name,
+    });
+    onChanged();
+  };
+
+  const selectOtherSpeaker = async () => {
+    if (!currentLine) return;
+    const label = window.prompt("Tên nhân vật phụ/khác:", currentLine.speaker_label ?? "");
+    if (label !== null) {
+      const lbl = label.trim() || "Nhân vật phụ";
+      setReviewLines((prev) =>
+        prev.map((l) =>
+          l.id === currentLine.id
+            ? { ...l, speaker_key: null, speaker_label: lbl, speaker_confidence: 1.0 }
+            : l
+        )
+      );
+      await dialogueApi.patchLine(currentLine.id, {
+        speaker_key: null,
+        speaker_label: lbl,
+      });
+      onChanged();
+    }
+  };
+
+  const applyAiSuggestion = async () => {
+    if (!currentLine?.speaker_suggestion) return;
+    const key = currentLine.speaker_suggestion.speaker_key;
+    const label = currentLine.speaker_suggestion.speaker_label;
+    const char = characters.find((c) => c.key === key);
+    const resolvedLabel = char?.name || label || key || "Chưa rõ";
+    setReviewLines((prev) =>
+      prev.map((l) =>
+        l.id === currentLine.id
+          ? {
+              ...l,
+              speaker_key: key ?? null,
+              speaker_label: resolvedLabel,
+              speaker_confidence: 1.0,
+              speaker_suggestion: null,
+            }
+          : l
+      )
+    );
+    await dialogueApi.applySpeakerSuggestion(currentLine.id);
+    onChanged();
+  };
+
+  const saveText = async () => {
+    if (!currentLine) return;
+    const t = editText.trim();
+    if (t && t !== currentLine.text) {
+      setReviewLines((prev) =>
+        prev.map((l) => (l.id === currentLine.id ? { ...l, text: t } : l))
+      );
+      await dialogueApi.patchLine(currentLine.id, { text: t });
+      onChanged();
+    }
+    setIsEditingText(false);
+  };
+
+  const revertToRaw = async () => {
+    if (!currentLine) return;
+    setReviewLines((prev) =>
+      prev.map((l) =>
+        l.id === currentLine.id
+          ? { ...l, text: l.text_raw, edited_by: "none", edit_note: null }
+          : l
+      )
+    );
+    setEditText(currentLine.text_raw);
+    await dialogueApi.revertLine(currentLine.id);
+    onChanged();
+  };
+
+  const acceptAndNext = async () => {
+    if (currentLine) {
+      await dialogueApi.patchLine(currentLine.id, { reviewed: true });
+      onChanged();
+    }
+    setIdx((prev) => prev + 1);
+  };
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (isEditingText) {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          saveText();
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          setIsEditingText(false);
+          if (currentLine) setEditText(currentLine.text);
+        }
+        return;
+      }
+
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+        return;
+      }
+
+      if (isDone) {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          onApprove();
+          onClose();
+        }
+        return;
+      }
+
+      if (e.key >= "1" && e.key <= "9") {
+        e.preventDefault();
+        const charIdx = parseInt(e.key, 10) - 1;
+        if (charIdx < orderedChars.length) {
+          selectSpeaker(orderedChars[charIdx]);
+        }
+        return;
+      }
+
+      if (e.key === "0") {
+        e.preventDefault();
+        selectOtherSpeaker();
+        return;
+      }
+
+      if (e.key === "a" || e.key === "A") {
+        e.preventDefault();
+        if (currentLine?.speaker_suggestion) {
+          applyAiSuggestion();
+        }
+        return;
+      }
+
+      if (e.key === "e" || e.key === "E") {
+        e.preventDefault();
+        setIsEditingText(true);
+        return;
+      }
+
+      if (e.key === "r" || e.key === "R") {
+        e.preventDefault();
+        revertToRaw();
+        return;
+      }
+
+      if (e.key === "Enter" || e.key === "ArrowRight") {
+        e.preventDefault();
+        acceptAndNext();
+        return;
+      }
+
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        if (idx > 0) setIdx(idx - 1);
+        return;
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isOpen, isEditingText, isDone, currentLine, idx, orderedChars, editText]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!isOpen) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/90 flex flex-col"
+      data-testid="quick-review-modal"
+    >
+      {/* Top bar */}
+      <div className="flex items-center justify-between px-6 py-3 border-b border-gray-800 bg-gray-950">
+        <div className="flex items-center gap-3">
+          <span className="font-semibold text-white">Soát nhanh kịch bản</span>
+          {!isDone && (
+            <span
+              className="text-xs font-mono font-medium px-2 py-0.5 rounded bg-indigo-900/60 text-indigo-200 border border-indigo-700/50"
+              data-testid="quick-review-progress"
+            >
+              {idx + 1}/{reviewLines.length}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2 text-xs text-gray-400">
+          <span>Phím: 1–9 Chọn người nói · A Áp dụng AI · E Sửa chữ · R Về gốc · Enter/→ Tiếp · ← Quay lại · Esc Thoát</span>
+          <button
+            onClick={onClose}
+            className="ml-4 px-2 py-1 rounded hover:bg-gray-800 text-gray-300"
+            data-testid="quick-review-close-btn"
+          >
+            ✕
+          </button>
+        </div>
+      </div>
+
+      {/* Main body */}
+      {isDone ? (
+        <div
+          className="flex-1 flex flex-col items-center justify-center p-8 space-y-4 text-center"
+          data-testid="quick-review-done"
+        >
+          <div className="w-16 h-16 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-3xl font-bold">
+            ✓
+          </div>
+          <h2 className="text-2xl font-bold text-white">Đã soát xong</h2>
+          <p className="text-gray-400 text-sm max-w-md">
+            Toàn bộ câu thoại cần lưu ý đã được kiểm tra và đánh dấu xem lại.
+          </p>
+          <div className="flex items-center gap-3 pt-2">
+            <Button
+              variant="primary"
+              className="!bg-emerald-600 hover:!bg-emerald-500 text-white font-medium px-6 py-2"
+              onClick={() => {
+                onApprove();
+                onClose();
+              }}
+              data-testid="quick-review-approve-btn"
+            >
+              <CheckCircle2 className="w-4 h-4" /> Duyệt kịch bản thoại
+            </Button>
+            <Button onClick={onClose}>Đóng</Button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-4 p-6 overflow-hidden">
+          {/* Left: Source frame image enlarged */}
+          <div className="flex items-center justify-center bg-gray-900/50 rounded-xl border border-gray-800 p-2 overflow-hidden h-full">
+            {currentFrame ? (
+              <img
+                src={currentFrame.image_url}
+                alt=""
+                className="max-h-full max-w-full object-contain rounded"
+                data-testid="quick-review-frame-img"
+              />
+            ) : (
+              <div className="text-gray-500 text-sm">Không có ảnh khung</div>
+            )}
+          </div>
+
+          {/* Right: Details & interactive controls */}
+          <div className="flex flex-col space-y-4 overflow-y-auto pr-2">
+            {/* Raw text */}
+            <div className="p-3 bg-gray-900/60 rounded-lg border border-gray-800">
+              <div className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-1">
+                Bản gốc
+              </div>
+              <div className="text-gray-300 font-mono text-sm" data-testid="quick-review-raw-text">
+                {currentLine.text_raw}
+              </div>
+            </div>
+
+            {/* Edited text */}
+            <div className="p-3 bg-gray-900/60 rounded-lg border border-gray-800">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
+                  Bản biên tập (Phím E sửa, Enter lưu)
+                </span>
+                {!isEditingText && (
+                  <button
+                    onClick={() => setIsEditingText(true)}
+                    className="text-xs text-primary hover:underline"
+                  >
+                    Sửa chữ (E)
+                  </button>
+                )}
+              </div>
+              {isEditingText ? (
+                <div className="space-y-2">
+                  <textarea
+                    autoFocus
+                    value={editText}
+                    onChange={(e) => setEditText(e.target.value)}
+                    data-testid="quick-review-text-input"
+                    className="w-full bg-black/60 border border-primary rounded p-2 text-sm text-white focus:outline-none"
+                    rows={3}
+                  />
+                  <div className="flex justify-end gap-2 text-xs">
+                    <button
+                      onClick={() => {
+                        setIsEditingText(false);
+                        setEditText(currentLine.text);
+                      }}
+                      className="px-2 py-1 rounded bg-gray-800 text-gray-300"
+                    >
+                      Hủy (Esc)
+                    </button>
+                    <button
+                      onClick={saveText}
+                      className="px-2 py-1 rounded bg-primary text-white font-medium"
+                    >
+                      Lưu (Enter)
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div
+                  onClick={() => setIsEditingText(true)}
+                  className="text-white text-base cursor-pointer hover:bg-gray-800/40 p-1.5 rounded transition"
+                  data-testid="quick-review-text-display"
+                  title="Bấm để sửa hoặc phím E"
+                >
+                  {currentLine.text}
+                </div>
+              )}
+            </div>
+
+            {/* Current speaker & AI suggestion */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="p-3 bg-gray-900/60 rounded-lg border border-gray-800">
+                <div className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-1">
+                  Người nói hiện tại
+                </div>
+                <div className="text-white font-medium text-sm" data-testid="quick-review-current-speaker">
+                  {characters.find((c) => c.key === currentLine.speaker_key)?.name ||
+                    currentLine.speaker_label ||
+                    currentLine.speaker_key ||
+                    "(Chưa rõ)"}
+                </div>
+                <div className="text-[11px] text-gray-400 mt-0.5">
+                  Độ tin cậy: {Math.round(currentLine.speaker_confidence * 100)}%
+                </div>
+              </div>
+
+              {currentLine.speaker_suggestion && (
+                <div
+                  className="p-3 bg-amber-500/10 rounded-lg border border-amber-500/30 flex flex-col justify-between"
+                  data-testid="quick-review-ai-suggestion"
+                >
+                  <div>
+                    <div className="text-[11px] font-semibold text-amber-300 uppercase tracking-wider mb-1">
+                      AI đề xuất (Phím A)
+                    </div>
+                    <div className="text-white font-medium text-sm">
+                      {characters.find((c) => c.key === currentLine.speaker_suggestion?.speaker_key)?.name ||
+                        currentLine.speaker_suggestion.speaker_label ||
+                        currentLine.speaker_suggestion.speaker_key ||
+                        "Chưa rõ"}
+                    </div>
+                    <div className="text-[11px] text-amber-200/80 italic mt-0.5">
+                      {currentLine.speaker_suggestion.reason}
+                    </div>
+                  </div>
+                  <button
+                    onClick={applyAiSuggestion}
+                    className="mt-2 w-full py-1 rounded bg-amber-600 hover:bg-amber-500 text-white font-medium text-xs transition"
+                    data-testid="quick-review-apply-ai-btn"
+                  >
+                    Áp dụng đề xuất (A)
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Character list 1-9 + 0 */}
+            <div className="p-3 bg-gray-900/60 rounded-lg border border-gray-800 flex-1">
+              <div className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-2">
+                Chọn người nói (Phím 1–9, 0)
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {orderedChars.map((c, i) => {
+                  const isSelected = c.key === currentLine.speaker_key;
+                  const inFrameThis = frameCharKeys.includes(c.key);
+                  return (
+                    <button
+                      key={c.key}
+                      onClick={() => selectSpeaker(c)}
+                      data-testid={`quick-review-char-${i + 1}`}
+                      className={`flex items-center gap-2 px-2.5 py-1.5 rounded text-left text-xs transition border ${
+                        isSelected
+                          ? "bg-primary/20 border-primary text-white font-semibold"
+                          : "bg-gray-800/60 border-gray-700/60 hover:bg-gray-700 text-gray-300"
+                      }`}
+                    >
+                      <span className="font-mono font-bold text-amber-400 shrink-0">
+                        [{i + 1}]
+                      </span>
+                      <span className="truncate flex-1">{c.name}</span>
+                      {inFrameThis && (
+                        <span className="text-[10px] px-1 rounded bg-sky-900/70 text-sky-200">
+                          Trong khung
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+                <button
+                  onClick={selectOtherSpeaker}
+                  data-testid="quick-review-char-0"
+                  className="flex items-center gap-2 px-2.5 py-1.5 rounded text-left text-xs bg-gray-800/40 border border-gray-700/40 hover:bg-gray-700 text-gray-400"
+                >
+                  <span className="font-mono font-bold text-gray-400 shrink-0">[0]</span>
+                  <span className="truncate">Nhân vật phụ / khác…</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Bottom action controls */}
+            <div className="flex items-center justify-between pt-2">
+              <div className="flex items-center gap-2">
+                <Button
+                  onClick={() => idx > 0 && setIdx(idx - 1)}
+                  disabled={idx === 0}
+                  className="text-xs"
+                >
+                  ← Quay lại
+                </Button>
+                <Button onClick={revertToRaw} className="text-xs" title="Phím R">
+                  <RotateCcw className="w-3.5 h-3.5" /> Bản gốc (R)
+                </Button>
+              </div>
+              <Button
+                variant="primary"
+                onClick={acceptAndNext}
+                data-testid="quick-review-next-btn"
+                className="bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs px-4"
+              >
+                Chấp nhận & Tiếp (Enter/→)
+              </Button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

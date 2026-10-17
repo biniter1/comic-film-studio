@@ -16,6 +16,7 @@ from app.models.analysis import (
     AnalysisRun,
     Character,
     CharacterOutfit,
+    CharacterRef,
     DialogueLine,
     GlossaryTerm,
 )
@@ -125,6 +126,7 @@ def get_dialogue(cid: str) -> dict[str, Any]:
                     "frame_type": f.frame_type,
                     "frame_type_source": f.frame_type_source,
                     "description": (f.reading or {}).get("description", ""),
+                    "characters": (f.reading or {}).get("characters", []),
                     "image_url": f"/api/assets/{f.asset_id}/file",
                 }
                 for f in frames
@@ -210,10 +212,65 @@ def update_line(lid: str, patch: dict[str, Any]) -> dict[str, Any]:
                     )
                 d.anchor_frame_id = fid
                 d.anchor_locked = True
+        if "speaker_suggestion" in patch:
+            d.speaker_suggestion = patch["speaker_suggestion"]
         if "reviewed" in patch and patch["reviewed"] is not None:
             d.reviewed = bool(patch["reviewed"])
         elif any(k in patch for k in ("text", "speaker_key", "speaker_label", "kind")):
             d.reviewed = True  # the user looked at it and changed it
+        s.add(d)
+        _touch_draft(s, ch)
+        s.commit()
+        s.refresh(d)
+        s.refresh(ch)
+        _emit(ch)
+        return line_dict(d)
+
+
+def apply_speaker_suggestion(lid: str) -> dict[str, Any]:
+    with _session() as s:
+        d = s.get(DialogueLine, lid)
+        if not d:
+            raise AppError("LINE_NOT_FOUND", "Không tìm thấy câu thoại", status_code=404)
+        ch = _editable(s, d.chapter_id)
+        sugg = d.speaker_suggestion
+        if not sugg:
+            raise AppError(
+                "NO_SUGGESTION", "Không có đề xuất người nói cho câu này", status_code=400
+            )
+
+        key = sugg.get("speaker_key")
+        label = sugg.get("speaker_label")
+        if key:
+            c = s.exec(
+                select(Character).where(Character.project_id == ch.project_id, Character.key == key)
+            ).first()
+            if c:
+                d.speaker_key = key
+                d.speaker_label = c.name
+                d.speaker_gender = c.gender
+                d.speaker_age = c.age_group
+            else:
+                d.speaker_key = key
+                if label:
+                    d.speaker_label = label
+        elif label:
+            d.speaker_label = label
+            c = s.exec(
+                select(Character).where(
+                    Character.project_id == ch.project_id, Character.name == label
+                )
+            ).first()
+            if c:
+                d.speaker_key = c.key
+                d.speaker_gender = c.gender
+                d.speaker_age = c.age_group
+            else:
+                d.speaker_key = None
+
+        d.speaker_confidence = 1.0
+        d.speaker_suggestion = None
+        d.reviewed = True
         s.add(d)
         _touch_draft(s, ch)
         s.commit()
@@ -521,6 +578,10 @@ def create_character(pid: str, data: dict[str, Any]) -> dict[str, Any]:
             ref_frame_ids=data.get("ref_frame_ids") or [],
             look_status=data.get("look_status") or "draft",
             status=data.get("status") or "approved",
+            role=data.get("role") or "supporting",
+            role_source=data.get("role_source") or "user",
+            is_group=bool(data.get("is_group", False)),
+            group_size_hint=data.get("group_size_hint"),
         )
         s.add(c)
         s.flush()
@@ -556,6 +617,17 @@ def update_character(chid: str, data: dict[str, Any]) -> dict[str, Any]:
         ):
             if k in data and data[k] is not None:
                 setattr(c, k, data[k].strip() if isinstance(data[k], str) else data[k])
+        if "role" in data and data["role"] is not None:
+            c.role = data["role"]
+            c.role_source = data.get("role_source", "user")
+        if "role_source" in data and data["role_source"] is not None:
+            c.role_source = data["role_source"]
+        if "is_group" in data and data["is_group"] is not None:
+            c.is_group = bool(data["is_group"])
+        if "group_size_hint" in data:
+            c.group_size_hint = data["group_size_hint"]
+        if "profile_proposal" in data:
+            c.profile_proposal = data["profile_proposal"]
         if data.get("aliases") is not None:
             c.aliases = [a.strip() for a in data["aliases"] if a.strip()]
         if data.get("ref_frame_ids") is not None:
@@ -591,6 +663,8 @@ def delete_character(chid: str) -> dict[str, Any]:
             s.add(d)
         for o in s.exec(select(CharacterOutfit).where(CharacterOutfit.character_id == c.id)).all():
             s.delete(o)
+        for r in s.exec(select(CharacterRef).where(CharacterRef.character_id == c.id)).all():
+            s.delete(r)
         s.flush()
         s.delete(c)
         s.commit()
@@ -621,6 +695,16 @@ def merge_character(chid: str, into_id: str) -> dict[str, Any]:
         if dst.age_group == "unknown":
             dst.age_group = src.age_group
         s.add(dst)
+
+        # Move character_refs of src to dst
+        src_refs = s.exec(select(CharacterRef).where(CharacterRef.character_id == src.id)).all()
+        dst_refs = s.exec(select(CharacterRef).where(CharacterRef.character_id == dst.id)).all()
+        max_order = max((r.order for r in dst_refs), default=0)
+        for r in src_refs:
+            max_order += 1
+            r.character_id = dst.id
+            r.order = max_order
+            s.add(r)
 
         # Move outfits of src to dst (avoid duplicate keys, preserve sheets, only 1 default)
         src_outfits = s.exec(
@@ -666,3 +750,43 @@ def merge_character(chid: str, into_id: str) -> dict[str, Any]:
         s.commit()
         s.refresh(dst)
         return dst.model_dump(mode="json")
+
+
+def apply_proposal(chid: str, fields: list[str] | None = None) -> dict[str, Any]:
+    """Apply approved fields from AI profile proposal to Character and default Outfit."""
+    with _session() as s:
+        c = s.get(Character, chid)
+        if not c:
+            raise AppError("CHARACTER_NOT_FOUND", "Không tìm thấy nhân vật", status_code=404)
+        if not c.profile_proposal:
+            raise AppError("NO_PROPOSAL", "Chưa có bản đề xuất hồ sơ ngoại hình", status_code=400)
+        prop = c.profile_proposal
+        f_set = set(fields) if fields else {"look_lock", "height_class", "outfit_lock", "short_id"}
+
+        if "look_lock" in f_set and "look_lock" in prop and prop["look_lock"]:
+            c.look_lock = prop["look_lock"]
+        if "height_class" in f_set and "height_class" in prop and prop["height_class"]:
+            c.height_class = prop["height_class"]
+
+        default_outfit = s.exec(
+            select(CharacterOutfit).where(
+                CharacterOutfit.character_id == c.id,
+                CharacterOutfit.is_default == True,  # noqa: E712
+            )
+        ).first()
+        if not default_outfit:
+            default_outfit = s.exec(
+                select(CharacterOutfit).where(CharacterOutfit.character_id == c.id)
+            ).first()
+
+        if default_outfit:
+            if "outfit_lock" in f_set and "outfit_lock" in prop and prop["outfit_lock"]:
+                default_outfit.outfit_lock = prop["outfit_lock"]
+            if "short_id" in f_set and "short_id" in prop and prop["short_id"]:
+                default_outfit.short_id = prop["short_id"]
+            s.add(default_outfit)
+
+        s.add(c)
+        s.commit()
+        s.refresh(c)
+        return c.model_dump(mode="json")

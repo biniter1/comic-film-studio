@@ -61,4 +61,32 @@ def test_length_deviation_flags_review():
     assert needs_review_for("Ngươi dám động vào ta sao?", "Ngươi dám?", None)
     assert not needs_review_for("Ngươi dám động vào ta sao?", "Ngươi dám đụng vào ta ư?", None)
     assert not needs_review_for("Hừ!", "Hừ hừ hừ!", None)  # very short lines exempt
-    assert needs_review_for("Đi thôi", "Đi thôi", "đổi nghĩa")  # model left a note
+    # Having a note alone does NOT flag review
+    assert not needs_review_for("Đi thôi", "Đi thôi", "đổi nghĩa")
+    # But uncertain=True flags review
+    assert needs_review_for("Đi thôi", "Đi thôi", "đổi nghĩa", uncertain=True)
+
+
+def test_needs_review_rules():
+    raw = "ĐỒ TRƯỞNG LÃO, NGƯƠI ĐI ĐI!"
+    new = "Đồ Trưởng Lão, ngươi đi đi!"
+    note = "đổi chữ hoa sang thường"
+
+    # raw "ĐỒ TRƯỞNG LÃO, NGƯƠI ĐI ĐI!" → new "Đồ Trưởng Lão, ngươi đi đi!"
+    # kèm note → needs_review False
+    assert not needs_review_for(raw, new, note=note, uncertain=False)
+
+    # uncertain=True → True
+    assert needs_review_for(raw, new, note=note, uncertain=True)
+
+    # lệch độ dài > 40% → True
+    shortened = "Ngươi đi đi!"
+    assert needs_review_for(raw, shortened, note=None, uncertain=False)
+
+    lengthened = "Đồ Trưởng Lão, ngươi mau chóng đi đi, ở đây nguy hiểm lắm!"
+    assert needs_review_for(raw, lengthened, note=None, uncertain=False)
+
+    # Thay đổi chỉ về hoa/thường + dấu câu → không bao giờ gắn cờ
+    assert not needs_review_for(
+        "HÔM NAY ĐẸP TRỜI QUÁ!", "Hôm nay đẹp trời quá...", note="sửa dấu câu"
+    )

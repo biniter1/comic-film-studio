@@ -235,6 +235,16 @@ def test_prompts_v2():
     assert '"lines": [' in dial_p
 
 
+def test_prompts_dialogue_v3():
+    from app.analysis.stages import PROMPT_VERSION_DIALOGUE
+
+    assert PROMPT_VERSION_DIALOGUE == "v3"
+    dial_p = load_prompt("dialogue", "v3")
+    assert "uncertain" in dial_p
+    assert "TUYỆT ĐỐI KHÔNG ghi edit_note" in dial_p
+    assert '"uncertain": true' in dial_p
+
+
 # ---------------------------------------------------------------------------
 # Item 12: Manual bundles JPEG conversion and HUONG_DAN.txt
 # ---------------------------------------------------------------------------

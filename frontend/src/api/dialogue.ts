@@ -6,6 +6,12 @@ export type Gender = "male" | "female" | "unknown";
 export type AgeGroup = "child" | "teen" | "young_adult" | "middle_aged" | "elderly" | "unknown";
 export type ReviewStatus = "suggested" | "approved" | "rejected";
 
+export interface SpeakerSuggestion {
+  speaker_key?: string | null;
+  speaker_label?: string | null;
+  reason: string;
+}
+
 export interface DialogueLine {
   id: string;
   chapter_id: string;
@@ -27,11 +33,36 @@ export interface DialogueLine {
   edit_note: string | null;
   needs_review: boolean;
   reviewed: boolean;
+  speaker_suggestion?: SpeakerSuggestion | null;
 }
 
 export type HeightClass = "child" | "short" | "average" | "tall" | "giant";
 export type LookStatus = "draft" | "approved";
 export type SheetStatus = "missing" | "pending" | "approved";
+export type CharacterRole = "main" | "supporting" | "extra";
+export type CharacterRoleSource = "ai" | "user";
+
+export interface LookProfileProposal {
+  look_lock: string;
+  outfit_lock: string;
+  short_id: string;
+  height_class: HeightClass;
+  palette: string[];
+  distinctive: string[];
+}
+
+export interface CharacterRef {
+  id: string;
+  character_id: string;
+  outfit_id: string | null;
+  asset_id: string;
+  source_frame_id: string | null;
+  crop: { x0: number; y0: number; x1: number; y1: number } | null;
+  note: string | null;
+  order: number;
+  image_url: string;
+  created_at?: string;
+}
 
 export interface CharacterOutfit {
   id: string;
@@ -62,8 +93,14 @@ export interface Character {
   ref_frame_ids: string[];
   look_status: LookStatus;
   status: ReviewStatus;
+  role: CharacterRole;
+  role_source?: CharacterRoleSource;
+  is_group: boolean;
+  group_size_hint: string | null;
+  profile_proposal?: LookProfileProposal | null;
   line_count?: number;
   outfits?: CharacterOutfit[];
+  refs?: CharacterRef[];
 }
 
 export interface LocationItem {
@@ -100,6 +137,7 @@ export interface DialogueFrame {
   frame_type: FrameType | null;
   frame_type_source: "ai" | "user" | null;
   description: string;
+  characters?: string[];
   image_url: string;
 }
 
@@ -154,7 +192,7 @@ export interface AddressRule {
 export type Stage = "read" | "dialogue";
 
 export type LinePatch = Partial<
-  Pick<DialogueLine, "text" | "speaker_key" | "speaker_label" | "kind" | "reviewed">
+  Pick<DialogueLine, "text" | "speaker_key" | "speaker_label" | "kind" | "reviewed" | "speaker_suggestion">
 > & { anchor_frame_id?: string | null };
 
 const json = (body: unknown): RequestInit => ({ body: JSON.stringify(body) });
@@ -189,6 +227,8 @@ export const dialogueApi = {
 
   patchLine: (lid: string, patch: LinePatch) =>
     request<DialogueLine>(`/dialogue/${lid}`, { method: "PATCH", ...json(patch) }),
+  applySpeakerSuggestion: (lid: string) =>
+    request<DialogueLine>(`/dialogue/${lid}/apply-speaker-suggestion`, { method: "POST" }),
   revertLine: (lid: string) => request<DialogueLine>(`/dialogue/${lid}/revert`, { method: "POST" }),
   reviewAll: (cid: string) =>
     request<{ reviewed: number }>(`/chapters/${cid}/dialogue/review-all`, { method: "POST" }),
@@ -254,6 +294,51 @@ export const dialogueApi = {
     request<CharacterOutfit | LocationItem>(`/${target}/${id}/sheet/approve`, { method: "POST" }),
   rejectSheet: (target: "outfits" | "locations", id: string) =>
     request<CharacterOutfit | LocationItem>(`/${target}/${id}/sheet/reject`, { method: "POST" }),
+
+  // Character Refs & Profile
+  cropRef: (
+    chid: string,
+    data: {
+      frame_id: string;
+      x0: number;
+      y0: number;
+      x1: number;
+      y1: number;
+      outfit_id?: string;
+      note?: string;
+    }
+  ) => request<CharacterRef>(`/characters/${chid}/refs/crop`, { method: "POST", ...json(data) }),
+
+  uploadRef: (chid: string, file: File, outfit_id?: string, note?: string) => {
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    if (outfit_id) fd.append("outfit_id", outfit_id);
+    if (note) fd.append("note", note);
+    return request<CharacterRef>(`/characters/${chid}/refs/upload`, {
+      method: "POST",
+      body: fd,
+    });
+  },
+
+  listRefs: (chid: string) => request<CharacterRef[]>(`/characters/${chid}/refs`),
+  deleteRef: (rid: string) => request<unknown>(`/refs/${rid}`, { method: "DELETE" }),
+  updateRef: (rid: string, patch: Partial<CharacterRef>) =>
+    request<CharacterRef>(`/refs/${rid}`, { method: "PATCH", ...json(patch) }),
+
+  requestLookProfile: (chid: string) =>
+    request<{ job_id: string; job: Job }>(`/characters/${chid}/look-profile`, { method: "POST" }),
+
+  applyProposal: (chid: string, fields?: string[]) =>
+    request<Character>(`/characters/${chid}/apply-proposal`, {
+      method: "POST",
+      ...json({ fields }),
+    }),
+};
+
+export const ROLE_LABEL: Record<CharacterRole, string> = {
+  main: "Chính",
+  supporting: "Phụ",
+  extra: "Quần chúng",
 };
 
 export const FRAME_TYPE_LABEL: Record<FrameType, string> = {

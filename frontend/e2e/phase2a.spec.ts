@@ -48,6 +48,14 @@ test("phase 2a: analyze → line anchored to previous scene → edit, speaker, r
   await expect(rows).toHaveCount(3, { timeout: 30_000 });
   await expect(page.getByText("Thoại: bản nháp")).toBeVisible();
 
+  // filter by AI changed meaning (edit_note)
+  const hasNoteFilter = page.getByTestId("filter-has-note");
+  await expect(hasNoteFilter).toBeVisible();
+  await hasNoteFilter.check();
+  await expect(rows).toHaveCount(0);
+  await hasNoteFilter.uncheck();
+  await expect(rows).toHaveCount(3);
+
   // frame 2 is dialogue-only → its line is attached to frame #1
   const types = page.getByTestId("frame-type");
   await expect(types.nth(1)).toHaveValue("dialogue_only");
@@ -104,4 +112,63 @@ test("phase 2a: manual mode — bundle download + paste with validation error", 
   await unit.getByTestId("paste-text").fill('{"frames": []}');
   await unit.getByRole("button", { name: "Dán kết quả" }).click();
   await expect(page.getByText("Kết quả dán vào chưa đúng định dạng")).toBeVisible();
+});
+
+test("phase 2a: quick review mode keyboard navigation (key 2, enter, approve)", async ({
+  page,
+  request,
+}) => {
+  const { pid, cid } = await approvedChapter(request);
+
+  // Add characters so we have at least 2 characters to select from
+  await request.post(`/api/projects/${pid}/characters`, {
+    data: { name: "Lâm Phong", key: "lam_phong", gender: "male" },
+  });
+  await request.post(`/api/projects/${pid}/characters`, {
+    data: { name: "Tiểu Vân", key: "tieu_van", gender: "female" },
+  });
+
+  // Run analysis via fake provider
+  const an = await (
+    await request.post(`/api/chapters/${cid}/analysis/read`, {
+      data: { mode: "api", then_dialogue: true },
+    })
+  ).json();
+  for (const j of an.jobs) {
+    expect((await waitJob(request, j.id)).status).toBe("succeeded");
+  }
+
+  await page.goto(`/chapters/${cid}/dialogue`);
+  await expect(page.getByTestId("line-row")).toHaveCount(3);
+
+  // Click Soát nhanh button
+  const quickBtn = page.getByTestId("quick-review-btn");
+  await expect(quickBtn).toBeVisible();
+  await quickBtn.click();
+
+  // Modal opens
+  await expect(page.getByTestId("quick-review-modal")).toBeVisible();
+  await expect(page.getByTestId("quick-review-frame-img")).toBeVisible();
+  await expect(page.getByTestId("quick-review-char-2")).toBeVisible();
+
+  // 1. Phím 2 đổi người nói
+  await page.keyboard.press("2");
+  await expect(page.getByTestId("quick-review-current-speaker")).toContainText(/Tiểu Vân|Lâm Phong/);
+
+  // 2. Enter sang câu sau (hoặc hết câu)
+  await page.keyboard.press("Enter");
+
+  // Advance any remaining lines
+  for (let i = 0; i < 5; i++) {
+    const isDone = await page.getByTestId("quick-review-done").isVisible();
+    if (isDone) break;
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(200);
+  }
+
+  // 3. Hết câu thấy nút Duyệt
+  const approveBtn = page.getByTestId("quick-review-approve-btn");
+  await expect(approveBtn).toBeVisible();
+  await approveBtn.click();
+  await expect(page.getByText("Thoại: đã duyệt")).toBeVisible();
 });
