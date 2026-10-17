@@ -6,7 +6,9 @@ by the API provider (job) or pasted by the user (manual mode) — both go throug
 """
 
 import json
+import re
 import shutil
+import unicodedata
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,7 +34,84 @@ from app.models.project import Asset, Chapter, Frame
 from app.providers.base import ImagePart, ProviderRequest
 from app.storage import asset_abs_path, chapter_dir
 
+PROMPT_VERSION_READ = "v2"
+PROMPT_VERSION_DIALOGUE = "v3"
 PROMPT_VERSION = "v2"
+
+
+def prompt_version_for(stage: str) -> str:
+    return PROMPT_VERSION_READ if stage == "read" else PROMPT_VERSION_DIALOGUE
+
+
+def _slugify_vn(s: str) -> str:
+    """Normalize Vietnamese text to snake_case ascii string."""
+    if not s:
+        return ""
+    s = s.replace("đ", "d").replace("Đ", "d")
+    nfkd = unicodedata.normalize("NFKD", s)
+    unaccented = "".join(c for c in nfkd if not unicodedata.combining(c))
+    slug = re.sub(r"[^a-zA-Z0-9]+", "_", unaccented.lower()).strip("_")
+    return slug
+
+
+def check_vocative_speaker_conflict(
+    text: str,
+    speaker_key: str | None,
+    speaker_label: str | None,
+    characters: list[Character],
+) -> bool:
+    """Check if text starts with a vocative calling the current speaker's name/alias.
+
+    E.g. "Đồ trưởng lão, ..." when speaker is "do_truong_lao".
+    In dialogue logic: someone calling X means the speaker is NOT X.
+    """
+    if not text or (not speaker_key and not speaker_label):
+        return False
+
+    # Regex: match beginning vocative phrase followed by , or !
+    m = re.match(r"""^\s*["'“‘(\[]?\s*([^,!?\n\r"”’]+?)\s*[,!]""", text)
+    if not m:
+        return False
+
+    vocative = m.group(1).strip()
+    if not vocative or len(vocative) < 2:
+        return False
+
+    voc_slug = _slugify_vn(vocative)
+    voc_lower = vocative.lower()
+
+    # Find character if speaker_key matches
+    char = next((c for c in characters if c.key == speaker_key), None) if speaker_key else None
+    if not char and speaker_label:
+        char = next((c for c in characters if c.name.lower() == speaker_label.lower()), None)
+
+    names_to_check: list[str] = []
+    slugs_to_check: list[str] = []
+
+    if speaker_key:
+        slugs_to_check.append(speaker_key.lower().strip("_"))
+    if speaker_label:
+        names_to_check.append(speaker_label.lower())
+        slugs_to_check.append(_slugify_vn(speaker_label))
+
+    if char:
+        names_to_check.append(char.name.lower())
+        slugs_to_check.append(_slugify_vn(char.name))
+        slugs_to_check.append(char.key.lower().strip("_"))
+        for alias in char.aliases or []:
+            if alias:
+                names_to_check.append(alias.lower())
+                slugs_to_check.append(_slugify_vn(alias))
+
+    # Check match
+    if voc_lower in names_to_check:
+        return True
+    if voc_slug and voc_slug in slugs_to_check:
+        return True
+
+    return False
+
+
 READ_BATCH = 6
 DIALOGUE_CHUNK = 150
 DIALOGUE_CONTEXT = 10
@@ -360,7 +439,7 @@ def _upsert_run(s: Session, cid: str, stage: str, unit_index: int, **kw: Any) ->
     run.error = kw.get("error")
     run.provider = kw.get("provider", run.provider)
     run.model = kw.get("model", run.model)
-    run.prompt_version = PROMPT_VERSION
+    run.prompt_version = prompt_version_for(stage)
     if "payload" in kw:
         run.payload = {**(run.payload or {}), **kw["payload"]}
     if run.status in ("succeeded", "failed"):
@@ -525,7 +604,7 @@ def build_dialogue_request(
     req = ProviderRequest(
         stage="dialogue",
         model=settings.analysis_model_text,
-        system=load_prompt("dialogue", PROMPT_VERSION),
+        system=load_prompt("dialogue", PROMPT_VERSION_DIALOGUE),
         user_text=json.dumps(payload, ensure_ascii=False, indent=1),
     )
     return req, targets
@@ -552,8 +631,13 @@ def dialogue_validator(targets: list[str]):
     return check
 
 
-def needs_review_for(raw: str, new: str, note: str | None) -> bool:
-    if note:
+def needs_review_for(
+    raw: str,
+    new: str,
+    note: str | None = None,
+    uncertain: bool = False,
+) -> bool:
+    if uncertain or note:
         return True
     if len(raw) < 8:
         return False
@@ -573,6 +657,7 @@ def apply_dialogue_unit(
     with _session() as s:
         ch = _chapter(s, cid)
         terms = approved_terms(s, ch.project_id)
+        chars = list(s.exec(select(Character).where(Character.project_id == ch.project_id)).all())
         edits = {e.line_id: e for e in out.lines}
         for d in s.exec(select(DialogueLine).where(DialogueLine.id.in_(list(edits)))):
             if d.edited_by == "user":
@@ -582,7 +667,29 @@ def apply_dialogue_unit(
             d.text = new
             d.edited_by = "ai" if new != d.text_raw else "none"
             d.edit_note = e.edit_note
-            d.needs_review = d.needs_review or needs_review_for(d.text_raw, new, e.edit_note)
+
+            # AI speaker suggestion
+            if getattr(e, "speaker_suggestion", None):
+                sugg_dict = (
+                    e.speaker_suggestion.model_dump(mode="json", exclude_unset=True)
+                    if hasattr(e.speaker_suggestion, "model_dump")
+                    else dict(e.speaker_suggestion)
+                )
+                d.speaker_suggestion = sugg_dict
+                d.needs_review = True
+
+            # Code rule (không tin AI): vocative calling the current speaker
+            if check_vocative_speaker_conflict(
+                new, d.speaker_key, d.speaker_label, chars
+            ) or check_vocative_speaker_conflict(d.text_raw, d.speaker_key, d.speaker_label, chars):
+                d.needs_review = True
+                curr_sugg = dict(d.speaker_suggestion) if d.speaker_suggestion else {}
+                curr_sugg["reason"] = "Câu gọi tên chính người nói"
+                d.speaker_suggestion = curr_sugg
+
+            d.needs_review = d.needs_review or needs_review_for(
+                d.text_raw, new, e.edit_note, uncertain=bool(getattr(e, "uncertain", False))
+            )
             d.reviewed = False
             s.add(d)
         merge_glossary_candidates(s, ch.project_id, cid, out.glossary_candidates)
