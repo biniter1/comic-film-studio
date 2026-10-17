@@ -25,6 +25,19 @@ def e2e_responder(req: ProviderRequest) -> str:
     """
     import json
 
+    if req.stage == "character_profile":
+        return json.dumps(
+            {
+                "look_lock": "young man, long black hair tied high, sharp red eyes, athletic build",
+                "outfit_lock": "black martial arts robe with silver trim, leather belt",
+                "short_id": "black martial arts robe",
+                "height_class": "average",
+                "palette": ["black", "silver", "red"],
+                "distinctive": ["sharp red eyes", "high ponytail"],
+            },
+            ensure_ascii=False,
+        )
+
     data = json.loads(req.user_text)
     if req.stage == "read":
         targets = data["TARGET_FRAMES"]

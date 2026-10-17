@@ -1,10 +1,14 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  ArrowLeft,
+  ArrowRight,
   Check,
+  Crop,
   Download,
   Plus,
+  Sparkles,
   Star,
   Trash2,
   Upload,
@@ -16,12 +20,16 @@ import {
   AgeGroup,
   Character,
   CharacterOutfit,
+  CharacterRef,
+  CharacterRole,
+  FrameSuggestion,
   GENDER_LABEL,
   Gender,
   GlossaryTerm,
   HEIGHT_CLASS_LABEL,
   HeightClass,
   LocationItem,
+  ROLE_LABEL,
   ReviewStatus,
   SHEET_STATUS_LABEL,
   SheetStatus,
@@ -535,7 +543,318 @@ function SheetBlock({
 }
 
 // ---------------------------------------------------------------------------------------
-// Characters tab (Cards with Look Lock, Ref Frames & Outfits)
+// ---------------------------------------------------------------------------------------
+// Crop Reference Modal
+// ---------------------------------------------------------------------------------------
+function CropRefModal({
+  chid,
+  suggestions,
+  initialFrameId,
+  outfits,
+  onClose,
+  onSuccess,
+}: {
+  chid: string;
+  suggestions: FrameSuggestion[];
+  initialFrameId?: string;
+  outfits: CharacterOutfit[];
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const [selectedFrameId, setSelectedFrameId] = useState<string>(
+    initialFrameId || suggestions[0]?.id || ""
+  );
+  const [outfitId, setOutfitId] = useState<string>("");
+  const [note, setNote] = useState<string>("");
+  const [x0, setX0] = useState<number>(0);
+  const [y0, setY0] = useState<number>(0);
+  const [x1, setX1] = useState<number>(200);
+  const [y1, setY1] = useState<number>(200);
+  const [imgNaturalSize, setImgNaturalSize] = useState<{ w: number; h: number } | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const imgRef = useRef<HTMLImageElement>(null);
+  const selectedFrame = suggestions.find((s) => s.id === selectedFrameId) ?? suggestions[0];
+
+  const cropMut = useMutation({
+    mutationFn: () =>
+      dialogueApi.cropRef(chid, {
+        frame_id: selectedFrameId,
+        x0,
+        y0,
+        x1,
+        y1,
+        outfit_id: outfitId || undefined,
+        note: note.trim() || undefined,
+      }),
+    onSuccess: () => {
+      onSuccess();
+      onClose();
+    },
+    onError: (err: unknown) => {
+      const e = err as { message_vi?: string; message?: string };
+      setError(e.message_vi || e.message || "Lỗi cắt ảnh");
+    },
+  });
+
+  const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
+    const im = e.currentTarget;
+    setImgNaturalSize({ w: im.naturalWidth, h: im.naturalHeight });
+    const w = im.naturalWidth;
+    const h = im.naturalHeight;
+    const boxW = Math.min(250, Math.max(64, Math.floor(w * 0.5)));
+    const boxH = Math.min(250, Math.max(64, Math.floor(h * 0.5)));
+    const startX = Math.max(0, Math.floor((w - boxW) / 2));
+    const startY = Math.max(0, Math.floor((h - boxH) / 2));
+    setX0(startX);
+    setY0(startY);
+    setX1(startX + boxW);
+    setY1(startY + boxH);
+  };
+
+  const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!imgRef.current || !imgNaturalSize) return;
+    const rect = imgRef.current.getBoundingClientRect();
+    const scaleX = imgNaturalSize.w / rect.width;
+    const scaleY = imgNaturalSize.h / rect.height;
+    const clickX = Math.max(0, Math.min(imgNaturalSize.w, Math.round((e.clientX - rect.left) * scaleX)));
+    const clickY = Math.max(0, Math.min(imgNaturalSize.h, Math.round((e.clientY - rect.top) * scaleY)));
+    setIsDragging(true);
+    setDragStart({ x: clickX, y: clickY });
+    setX0(clickX);
+    setY0(clickY);
+    setX1(clickX);
+    setY1(clickY);
+  };
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!isDragging || !dragStart || !imgRef.current || !imgNaturalSize) return;
+    const rect = imgRef.current.getBoundingClientRect();
+    const scaleX = imgNaturalSize.w / rect.width;
+    const scaleY = imgNaturalSize.h / rect.height;
+    const currentX = Math.max(0, Math.min(imgNaturalSize.w, Math.round((e.clientX - rect.left) * scaleX)));
+    const currentY = Math.max(0, Math.min(imgNaturalSize.h, Math.round((e.clientY - rect.top) * scaleY)));
+    setX0(Math.min(dragStart.x, currentX));
+    setY0(Math.min(dragStart.y, currentY));
+    setX1(Math.max(dragStart.x, currentX));
+    setY1(Math.max(dragStart.y, currentY));
+  };
+
+  const handleMouseUp = () => {
+    setIsDragging(false);
+    setDragStart(null);
+  };
+
+  const width = x1 - x0;
+  const height = y1 - y0;
+  const isValid =
+    selectedFrameId &&
+    width >= 64 &&
+    height >= 64 &&
+    imgNaturalSize &&
+    x0 >= 0 &&
+    y0 >= 0 &&
+    x1 <= imgNaturalSize.w &&
+    y1 <= imgNaturalSize.h;
+
+  const overlayLeft = imgNaturalSize ? `${(x0 / imgNaturalSize.w) * 100}%` : "0%";
+  const overlayTop = imgNaturalSize ? `${(y0 / imgNaturalSize.h) * 100}%` : "0%";
+  const overlayWidth = imgNaturalSize ? `${(width / imgNaturalSize.w) * 100}%` : "0%";
+  const overlayHeight = imgNaturalSize ? `${(height / imgNaturalSize.h) * 100}%` : "0%";
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4">
+      <div className="bg-surface border border-border rounded-xl max-w-3xl w-full max-h-[90vh] flex flex-col overflow-hidden shadow-2xl">
+        <div className="flex items-center justify-between p-4 border-b border-border">
+          <div className="flex items-center gap-2">
+            <Crop className="w-5 h-5 text-primary" />
+            <h3 className="font-semibold text-gray-100">Cắt ảnh tham chiếu từ khung truyện</h3>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1 rounded text-gray-400 hover:text-white hover:bg-background"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="p-4 space-y-4 overflow-y-auto flex-1">
+          {error && (
+            <div className="p-2.5 rounded bg-red-950/80 border border-red-800 text-xs text-red-300">
+              {error}
+            </div>
+          )}
+
+          {/* Frame selection */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-gray-300">
+              1. Chọn khung truyện chứa nhân vật:
+            </label>
+            {suggestions.length === 0 ? (
+              <div className="text-xs text-amber-300 bg-amber-950/40 p-2.5 rounded border border-amber-900/60">
+                Chưa có gợi ý khung từ AI cho nhân vật này. Chạy phân tích kịch bản để tự động tìm khung.
+              </div>
+            ) : (
+              <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto p-1.5 bg-background/50 rounded border border-border">
+                {suggestions.map((f) => (
+                  <button
+                    key={f.id}
+                    type="button"
+                    data-testid={`select-frame-${f.id}`}
+                    onClick={() => {
+                      setSelectedFrameId(f.id);
+                      setImgNaturalSize(null);
+                    }}
+                    className={`relative rounded overflow-hidden border-2 transition-all ${
+                      selectedFrameId === f.id
+                        ? "border-primary ring-2 ring-primary/40 scale-105"
+                        : "border-border opacity-70 hover:opacity-100"
+                    }`}
+                  >
+                    <img src={f.image_url} alt={`Khung #${f.idx}`} className="w-16 h-16 object-cover" />
+                    <span className="absolute bottom-0 right-0 bg-black/70 text-[9px] text-white px-1">
+                      #{f.idx}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Frame image + crop area */}
+          {selectedFrame && (
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-xs text-gray-400">
+                <span>2. Kéo chọn vùng trên ảnh (tối thiểu 64×64 px):</span>
+                {imgNaturalSize && (
+                  <span>
+                    Khung: {imgNaturalSize.w}×{imgNaturalSize.h} px | Vùng cắt: {width}×{height} px{" "}
+                    {(width < 64 || height < 64) && (
+                      <span className="text-amber-400 font-semibold">(Tối thiểu 64×64 px)</span>
+                    )}
+                  </span>
+                )}
+              </div>
+
+              <div
+                className="relative border border-border rounded overflow-hidden bg-black/50 select-none cursor-crosshair flex items-center justify-center max-h-[380px]"
+                onMouseDown={handleMouseDown}
+                onMouseMove={handleMouseMove}
+                onMouseUp={handleMouseUp}
+              >
+                <img
+                  ref={imgRef}
+                  src={selectedFrame.image_url}
+                  alt="Frame for crop"
+                  onLoad={handleImageLoad}
+                  className="max-h-[380px] max-w-full object-contain pointer-events-none"
+                />
+                {imgNaturalSize && width > 0 && height > 0 && (
+                  <div
+                    className="absolute border-2 border-primary bg-primary/20 pointer-events-none"
+                    style={{
+                      left: overlayLeft,
+                      top: overlayTop,
+                      width: overlayWidth,
+                      height: overlayHeight,
+                    }}
+                  >
+                    <span className="absolute top-0 left-0 bg-primary text-[10px] text-white px-1">
+                      {width}×{height}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* Coordinate manual inputs */}
+              <div className="flex flex-wrap items-center gap-2 pt-1 text-xs">
+                <span className="text-gray-400 font-medium">Tọa độ:</span>
+                <label className="flex items-center gap-1">
+                  x0:
+                  <input
+                    type="number"
+                    data-testid="crop-x0"
+                    className={`${input} w-16 py-0.5 text-xs`}
+                    value={x0}
+                    onChange={(e) => setX0(Number(e.target.value))}
+                  />
+                </label>
+                <label className="flex items-center gap-1">
+                  y0:
+                  <input
+                    type="number"
+                    data-testid="crop-y0"
+                    className={`${input} w-16 py-0.5 text-xs`}
+                    value={y0}
+                    onChange={(e) => setY0(Number(e.target.value))}
+                  />
+                </label>
+                <label className="flex items-center gap-1">
+                  x1:
+                  <input
+                    type="number"
+                    data-testid="crop-x1"
+                    className={`${input} w-16 py-0.5 text-xs`}
+                    value={x1}
+                    onChange={(e) => setX1(Number(e.target.value))}
+                  />
+                </label>
+                <label className="flex items-center gap-1">
+                  y1:
+                  <input
+                    type="number"
+                    data-testid="crop-y1"
+                    className={`${input} w-16 py-0.5 text-xs`}
+                    value={y1}
+                    onChange={(e) => setY1(Number(e.target.value))}
+                  />
+                </label>
+                <select
+                  className={`${input} text-xs py-0.5`}
+                  value={outfitId}
+                  onChange={(e) => setOutfitId(e.target.value)}
+                >
+                  <option value="">Gắn trang phục (tùy chọn)…</option>
+                  {outfits.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.name_vi}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  className={`${input} flex-1 min-w-[8rem] text-xs py-0.5`}
+                  placeholder="Ghi chú (tùy chọn)…"
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                />
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="p-4 border-t border-border bg-background/50 flex items-center justify-end gap-2">
+          <Button variant="secondary" onClick={onClose}>
+            Hủy
+          </Button>
+          <Button
+            variant="primary"
+            data-testid="save-crop-btn"
+            disabled={!isValid || cropMut.isPending}
+            onClick={() => cropMut.mutate()}
+          >
+            <Check className="w-4 h-4" /> Lưu ảnh tham chiếu
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------------------
+// Characters tab (Cards with Look Lock, Character Refs, AI Profile & Outfits)
 // ---------------------------------------------------------------------------------------
 function CharactersTab({ pid }: { pid: string }) {
   const qc = useQueryClient();
@@ -546,11 +865,16 @@ function CharactersTab({ pid }: { pid: string }) {
     qc.invalidateQueries({ queryKey: ["characters", pid] });
   };
 
+  const [roleFilter, setRoleFilter] = useState<string>("all");
+
   const empty = {
     name: "",
     gender: "unknown" as Gender,
     age_group: "unknown" as AgeGroup,
     height_class: "average" as HeightClass,
+    role: "supporting" as CharacterRole,
+    is_group: false,
+    group_size_hint: "",
   };
   const [form, setForm] = useState(empty);
   const create = useMutation({
@@ -558,6 +882,7 @@ function CharactersTab({ pid }: { pid: string }) {
       dialogueApi.createCharacter(pid, {
         ...form,
         name: form.name.trim(),
+        group_size_hint: form.is_group ? form.group_size_hint.trim() : undefined,
       }),
     onSuccess: () => {
       setForm(empty);
@@ -566,10 +891,43 @@ function CharactersTab({ pid }: { pid: string }) {
   });
 
   const chars = q.data?.characters ?? [];
+  const filteredChars = chars.filter((c) => roleFilter === "all" || c.role === roleFilter);
 
   return (
     <div className="space-y-4">
       <ErrorBox error={q.error || create.error} />
+
+      {/* Role filter bar */}
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 pb-3">
+        <div className="flex items-center gap-1.5 text-xs">
+          <span className="text-gray-400 mr-1 font-medium">Lọc hạng:</span>
+          {[
+            { id: "all", label: "Tất cả" },
+            { id: "main", label: "Chính" },
+            { id: "supporting", label: "Phụ" },
+            { id: "extra", label: "Quần chúng" },
+          ].map((f) => (
+            <button
+              key={f.id}
+              type="button"
+              data-testid={`filter-role-${f.id}`}
+              onClick={() => setRoleFilter(f.id)}
+              className={`px-3 py-1 rounded text-xs transition-colors ${
+                roleFilter === f.id
+                  ? "bg-primary text-white font-semibold"
+                  : "bg-surface hover:bg-surface/80 text-gray-300 border border-border"
+              }`}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+        <span className="text-xs text-gray-500">
+          Hiển thị {filteredChars.length}/{chars.length} nhân vật
+        </span>
+      </div>
+
+      {/* Add character form */}
       <form
         className="flex flex-wrap gap-2 items-center rounded-xl border border-border bg-surface p-3"
         onSubmit={(e) => {
@@ -578,7 +936,7 @@ function CharactersTab({ pid }: { pid: string }) {
         }}
       >
         <input
-          className={`${input} w-52`}
+          className={`${input} w-48`}
           placeholder="Tên nhân vật mới"
           value={form.name}
           onChange={(e) => setForm({ ...form, name: e.target.value })}
@@ -599,6 +957,33 @@ function CharactersTab({ pid }: { pid: string }) {
             </option>
           ))}
         </select>
+        <select
+          className={input}
+          value={form.role}
+          onChange={(e) => setForm({ ...form, role: e.target.value as CharacterRole })}
+        >
+          {Object.entries(ROLE_LABEL).map(([val, label]) => (
+            <option key={val} value={val}>
+              Hạng: {label}
+            </option>
+          ))}
+        </select>
+        <label className="flex items-center gap-1.5 text-xs text-gray-300 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={form.is_group}
+            onChange={(e) => setForm({ ...form, is_group: e.target.checked })}
+          />
+          Nhóm
+        </label>
+        {form.is_group && (
+          <input
+            className={`${input} w-32`}
+            placeholder="Quy mô (2-3 người)"
+            value={form.group_size_hint}
+            onChange={(e) => setForm({ ...form, group_size_hint: e.target.value })}
+          />
+        )}
         <Button variant="primary" type="submit" disabled={!form.name.trim() || create.isPending}>
           <Plus className="w-4 h-4" /> Thêm nhân vật
         </Button>
@@ -610,8 +995,14 @@ function CharactersTab({ pid }: { pid: string }) {
         </div>
       )}
 
+      {chars.length > 0 && filteredChars.length === 0 && (
+        <div className="p-6 text-center text-sm text-gray-400 bg-surface rounded-xl border border-border">
+          Không có nhân vật nào thuộc hạng này.
+        </div>
+      )}
+
       <div className="space-y-4">
-        {chars.map((c) => (
+        {filteredChars.map((c) => (
           <CharacterCard key={c.id} c={c} allChars={chars} onUpdated={done} />
         ))}
       </div>
@@ -662,37 +1053,108 @@ function CharacterCard({
     queryFn: () => dialogueApi.frameSuggestions(c.id),
   });
 
+  // Refs mutations
+  const uploadRefMut = useMutation({
+    mutationFn: (file: File) => dialogueApi.uploadRef(c.id, file),
+    onSuccess: onUpdated,
+  });
+  const delRefMut = useMutation({
+    mutationFn: (rid: string) => dialogueApi.deleteRef(rid),
+    onSuccess: onUpdated,
+  });
+  const updateRefMut = useMutation({
+    mutationFn: ({ rid, patch }: { rid: string; patch: Partial<CharacterRef> }) =>
+      dialogueApi.updateRef(rid, patch),
+    onSuccess: onUpdated,
+  });
+
+  // AI Look Profile Mutation
+  const profileMut = useMutation({
+    mutationFn: () => dialogueApi.requestLookProfile(c.id),
+    onSuccess: async (data) => {
+      if (data?.job_id) {
+        let attempts = 0;
+        const interval = setInterval(async () => {
+          attempts++;
+          try {
+            const res = await fetch(`/api/jobs/${data.job_id}`);
+            if (res.ok) {
+              const j = await res.json();
+              if (["succeeded", "failed", "cancelled"].includes(j.status)) {
+                clearInterval(interval);
+                onUpdated();
+              }
+            }
+          } catch {
+            // ignore
+          }
+          if (attempts > 60) clearInterval(interval);
+        }, 500);
+      }
+      onUpdated();
+    },
+  });
+
+  // Proposal mutations
+  const applyProposalMut = useMutation({
+    mutationFn: (fields?: string[]) => dialogueApi.applyProposal(c.id, fields),
+    onSuccess: onUpdated,
+  });
+  const dismissProposalMut = useMutation({
+    mutationFn: () => dialogueApi.updateCharacter(c.id, { profile_proposal: null }),
+    onSuccess: onUpdated,
+  });
+
   // Local state for look_lock
   const [lookLockText, setLookLockText] = useState(c.look_lock ?? "");
   const [newOutfitName, setNewOutfitName] = useState("");
   const [newOutfitLock, setNewOutfitLock] = useState("");
   const [newOutfitShortId, setNewOutfitShortId] = useState("");
+  const [cropModalOpen, setCropModalOpen] = useState(false);
+  const [selectedCropFrameId, setSelectedCropFrameId] = useState<string>("");
+
+  useEffect(() => {
+    setLookLockText(c.look_lock ?? "");
+  }, [c.look_lock]);
 
   const words = countWords(lookLockText);
-  const refIds = c.ref_frame_ids ?? [];
-
-  const toggleRefFrame = (fid: string) => {
-    const next = refIds.includes(fid) ? refIds.filter((id) => id !== fid) : [...refIds, fid];
-    update.mutate({ ref_frame_ids: next });
-  };
-
+  const refs = c.refs ?? [];
   const outfits = c.outfits ?? [];
+  const defaultOutfit = outfits.find((o) => o.is_default) ?? outfits[0];
+
+  const swapOrder = (r1: CharacterRef, r2: CharacterRef) => {
+    const o1 = r1.order;
+    const o2 = r2.order;
+    updateRefMut.mutate({ rid: r1.id, patch: { order: o2 } });
+    updateRefMut.mutate({ rid: r2.id, patch: { order: o1 } });
+  };
 
   return (
     <div
       className="rounded-xl border border-border bg-surface p-4 space-y-4"
       data-testid="character-row"
     >
-      <ErrorBox error={update.error || del.error || merge.error || createOutfit.error} />
+      <ErrorBox
+        error={
+          update.error ||
+          del.error ||
+          merge.error ||
+          createOutfit.error ||
+          uploadRefMut.error ||
+          delRefMut.error ||
+          profileMut.error ||
+          applyProposalMut.error
+        }
+      />
 
       {/* Row 1: Basic info */}
       <div className="flex flex-wrap items-center gap-2">
         <InlineText
           value={c.name}
-          className="w-44 font-semibold text-base"
+          className="w-40 font-semibold text-base"
           onSave={(v) => v.trim() && update.mutate({ name: v })}
         />
-        <span className="font-mono text-xs text-gray-500 w-28 truncate" title="key">
+        <span className="font-mono text-xs text-gray-500 w-24 truncate" title="key">
           {c.key}
         </span>
         <GenderAge
@@ -711,15 +1173,51 @@ function CharacterCard({
             </option>
           ))}
         </select>
+
+        {/* Character Role Select */}
+        <select
+          className={`${input} text-xs font-semibold`}
+          data-testid="character-role-select"
+          value={c.role || "supporting"}
+          onChange={(e) =>
+            update.mutate({ role: e.target.value as CharacterRole, role_source: "user" })
+          }
+        >
+          {Object.entries(ROLE_LABEL).map(([val, label]) => (
+            <option key={val} value={val}>
+              {label}
+            </option>
+          ))}
+        </select>
+
+        {/* Group checkbox */}
+        <label className="flex items-center gap-1 text-xs text-gray-300 cursor-pointer">
+          <input
+            type="checkbox"
+            data-testid="character-is-group"
+            checked={c.is_group ?? false}
+            onChange={(e) => update.mutate({ is_group: e.target.checked })}
+          />
+          Nhóm
+        </label>
+        {c.is_group && (
+          <InlineText
+            value={c.group_size_hint ?? ""}
+            className="w-28 text-xs"
+            placeholder="vd: 2–3 người"
+            onSave={(v) => update.mutate({ group_size_hint: v })}
+          />
+        )}
+
         <InlineText
           value={(c.aliases ?? []).join(", ")}
-          className="w-40"
+          className="w-36"
           placeholder="bí danh…"
           onSave={(v) => update.mutate({ aliases: splitList(v) })}
         />
         <InlineText
           value={c.voice_style ?? ""}
-          className="w-36"
+          className="w-32"
           placeholder="kiểu giọng…"
           onSave={(v) => update.mutate({ voice_style: v })}
         />
@@ -820,169 +1318,421 @@ function CharacterCard({
         />
       </div>
 
-      {/* Row 3: Reference frames selection */}
-      <div className="rounded-lg border border-border/80 bg-background/40 p-3 space-y-2">
-        <div className="flex items-center justify-between text-xs">
-          <span className="font-semibold text-gray-200">
-            Khung tham chiếu: {refIds.length} đã chọn (khuyên dùng 2–4 khung rõ mặt)
-          </span>
-          <span className="text-gray-400">Click khung để chọn / bỏ</span>
+      {/* Row 3: Khối Ảnh tham chiếu */}
+      <div className="rounded-lg border border-border/80 bg-background/40 p-3 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold text-gray-200">
+              Ảnh tham chiếu: {refs.length} ảnh
+            </span>
+            <span className="text-xs text-gray-400">
+              (dùng cho gói Sheet và AI tạo hồ sơ ngoại hình)
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="secondary"
+              data-testid="crop-ref-btn"
+              className="text-xs py-1 px-2.5"
+              onClick={() => {
+                setSelectedCropFrameId(suggestions.data?.[0]?.id || "");
+                setCropModalOpen(true);
+              }}
+            >
+              <Crop className="w-3.5 h-3.5" /> Cắt từ khung
+            </Button>
+
+            <label
+              data-testid="upload-ref-btn"
+              className="cursor-pointer inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded border border-border bg-surface hover:border-gray-400 text-gray-300 transition-colors"
+            >
+              <Upload className="w-3.5 h-3.5" /> Tải ảnh lên
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) uploadRefMut.mutate(file);
+                  e.target.value = "";
+                }}
+              />
+            </label>
+
+            <Button
+              variant="primary"
+              data-testid="ai-look-profile-btn"
+              className="text-xs py-1 px-2.5"
+              disabled={refs.length === 0 || profileMut.isPending}
+              onClick={() => profileMut.mutate()}
+              title={
+                refs.length === 0
+                  ? "Cần ít nhất 1 ảnh tham chiếu"
+                  : "AI phân tích ảnh tham chiếu để tạo hồ sơ ngoại hình"
+              }
+            >
+              <Sparkles className="w-3.5 h-3.5" /> AI tạo hồ sơ ngoại hình (~3 credit)
+            </Button>
+          </div>
         </div>
 
-        {suggestions.isLoading && <div className="text-xs text-gray-500">Đang tìm gợi ý khung...</div>}
-        {suggestions.data && suggestions.data.length === 0 && (
-          <div className="text-xs text-gray-500 italic">
-            Chưa có gợi ý khung từ AI (chạy phân tích kịch bản để tự động tìm khung có nhân vật này).
-          </div>
-        )}
-
+        {/* Suggested frames quick-access */}
         {suggestions.data && suggestions.data.length > 0 && (
-          <div className="flex flex-wrap gap-2 pt-1">
-            {suggestions.data.map((f) => {
-              const selected = refIds.includes(f.id);
-              return (
+          <div className="space-y-1">
+            <span className="text-[11px] text-gray-400">
+              Gợi ý khung chứa nhân vật (click để cắt ảnh tham chiếu):
+            </span>
+            <div className="flex flex-wrap gap-2 pt-0.5">
+              {suggestions.data.map((f) => (
                 <button
                   key={f.id}
                   type="button"
                   data-testid="ref-frame-thumb"
-                  onClick={() => toggleRefFrame(f.id)}
-                  className={`relative rounded-md overflow-hidden border-2 transition-all ${
-                    selected
-                      ? "border-primary ring-2 ring-primary/40 scale-105"
-                      : "border-border hover:border-gray-400 opacity-70 hover:opacity-100"
-                  }`}
-                  title={`Khung #${f.idx} (${f.frame_type || "scene"})`}
+                  onClick={() => {
+                    setSelectedCropFrameId(f.id);
+                    setCropModalOpen(true);
+                  }}
+                  className="relative rounded-md overflow-hidden border-2 border-border hover:border-primary opacity-80 hover:opacity-100 transition-all hover:scale-105"
+                  title={`Khung #${f.idx} (${f.frame_type || "scene"}) - Bấm để cắt tham chiếu`}
                 >
-                  <img src={f.image_url} alt={`Khung #${f.idx}`} className="w-20 h-20 object-cover" />
-                  <span className="absolute bottom-0 right-0 bg-black/70 text-[10px] text-white px-1">
+                  <img src={f.image_url} alt={`Khung #${f.idx}`} className="w-16 h-16 object-cover" />
+                  <span className="absolute bottom-0 right-0 bg-black/70 text-[9px] text-white px-1">
                     #{f.idx}
                   </span>
-                  {selected && (
-                    <span className="absolute top-0 right-0 bg-primary text-white p-0.5 rounded-bl">
-                      <Check className="w-3 h-3" />
-                    </span>
-                  )}
                 </button>
-              );
-            })}
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* References grid */}
+        {refs.length === 0 ? (
+          <div className="text-xs text-gray-500 italic py-1">
+            Chưa có ảnh tham chiếu. Bấm "Cắt từ khung" hoặc "Tải ảnh lên" để tạo ảnh tham chiếu cho nhân vật.
+          </div>
+        ) : (
+          <div className="flex flex-wrap gap-2.5 pt-1">
+            {refs.map((r, idx) => (
+              <div
+                key={r.id}
+                data-testid="char-ref-item"
+                className="group relative rounded-lg overflow-hidden border border-border bg-black/40 w-24 h-24 flex items-center justify-center shadow"
+              >
+                <img
+                  src={r.image_url}
+                  alt={`Ref #${r.order}`}
+                  className="w-full h-full object-cover"
+                />
+                <span className="absolute top-1 left-1 bg-black/75 text-[10px] text-white px-1 rounded font-mono">
+                  #{r.order}
+                </span>
+                {r.outfit_id && (
+                  <span className="absolute bottom-1 left-1 bg-primary/80 text-[9px] text-white px-1 rounded truncate max-w-[80px]">
+                    {outfits.find((o) => o.id === r.outfit_id)?.name_vi || "Outfit"}
+                  </span>
+                )}
+                <div className="absolute inset-0 bg-black/65 opacity-0 group-hover:opacity-100 flex items-center justify-center gap-1 transition-opacity">
+                  {idx > 0 && (
+                    <button
+                      type="button"
+                      title="Chuyển sang trước"
+                      onClick={() => swapOrder(r, refs[idx - 1])}
+                      className="p-1 rounded bg-surface/80 hover:bg-surface text-gray-200"
+                    >
+                      <ArrowLeft className="w-3 h-3" />
+                    </button>
+                  )}
+                  {idx < refs.length - 1 && (
+                    <button
+                      type="button"
+                      title="Chuyển sang sau"
+                      onClick={() => swapOrder(r, refs[idx + 1])}
+                      className="p-1 rounded bg-surface/80 hover:bg-surface text-gray-200"
+                    >
+                      <ArrowRight className="w-3 h-3" />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    data-testid="delete-ref-btn"
+                    title="Xóa ảnh tham chiếu"
+                    onClick={() => delRefMut.mutate(r.id)}
+                    className="p-1 rounded bg-red-950/80 hover:bg-red-900 text-red-300"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* AI Proposal Comparison Table */}
+        {c.profile_proposal && (
+          <div className="mt-3 rounded-lg border border-primary/40 bg-primary/5 p-3 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-bold text-primary flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5" /> Bản đề xuất hồ sơ ngoại hình từ AI
+              </span>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="primary"
+                  className="text-xs py-0.5 px-2.5"
+                  data-testid="apply-all-proposal"
+                  onClick={() => applyProposalMut.mutate(undefined)}
+                >
+                  <Check className="w-3 h-3" /> Áp dụng tất cả
+                </Button>
+                <Button
+                  variant="secondary"
+                  className="text-xs py-0.5 px-2 text-gray-400 hover:text-red-300"
+                  data-testid="dismiss-proposal"
+                  onClick={() => dismissProposalMut.mutate()}
+                >
+                  <X className="w-3 h-3" /> Bỏ qua đề xuất
+                </Button>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left">
+                <thead>
+                  <tr className="border-b border-border/60 text-gray-400">
+                    <th className="py-1 px-2 font-medium w-32">Trường</th>
+                    <th className="py-1 px-2 font-medium">Hiện tại</th>
+                    <th className="py-1 px-2 font-medium text-emerald-400">AI Đề xuất</th>
+                    <th className="py-1 px-2 font-medium w-24 text-right">Hành động</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border/40">
+                  <tr>
+                    <td className="py-1.5 px-2 text-gray-300 font-medium">Khóa ngoại hình</td>
+                    <td className="py-1.5 px-2 text-gray-400">{c.look_lock || "—"}</td>
+                    <td className="py-1.5 px-2 text-emerald-300 font-mono text-[11px]">
+                      {c.profile_proposal.look_lock}
+                    </td>
+                    <td className="py-1.5 px-2 text-right">
+                      <Button
+                        variant="secondary"
+                        className="text-[11px] py-0.5 px-2"
+                        data-testid="apply-look-lock"
+                        onClick={() => applyProposalMut.mutate(["look_lock"])}
+                      >
+                        Áp dụng
+                      </Button>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td className="py-1.5 px-2 text-gray-300 font-medium">Dáng người</td>
+                    <td className="py-1.5 px-2 text-gray-400">
+                      {HEIGHT_CLASS_LABEL[c.height_class || "average"]}
+                    </td>
+                    <td className="py-1.5 px-2 text-emerald-300">
+                      {HEIGHT_CLASS_LABEL[c.profile_proposal.height_class as HeightClass] ||
+                        c.profile_proposal.height_class}
+                    </td>
+                    <td className="py-1.5 px-2 text-right">
+                      <Button
+                        variant="secondary"
+                        className="text-[11px] py-0.5 px-2"
+                        data-testid="apply-height-class"
+                        onClick={() => applyProposalMut.mutate(["height_class"])}
+                      >
+                        Áp dụng
+                      </Button>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td className="py-1.5 px-2 text-gray-300 font-medium">Khóa trang phục</td>
+                    <td className="py-1.5 px-2 text-gray-400">{defaultOutfit?.outfit_lock || "—"}</td>
+                    <td className="py-1.5 px-2 text-emerald-300 font-mono text-[11px]">
+                      {c.profile_proposal.outfit_lock}
+                    </td>
+                    <td className="py-1.5 px-2 text-right">
+                      <Button
+                        variant="secondary"
+                        className="text-[11px] py-0.5 px-2"
+                        data-testid="apply-outfit-lock"
+                        onClick={() => applyProposalMut.mutate(["outfit_lock"])}
+                      >
+                        Áp dụng
+                      </Button>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td className="py-1.5 px-2 text-gray-300 font-medium">Tên ngắn trang phục</td>
+                    <td className="py-1.5 px-2 text-gray-400">{defaultOutfit?.short_id || "—"}</td>
+                    <td className="py-1.5 px-2 text-emerald-300">
+                      {c.profile_proposal.short_id}
+                    </td>
+                    <td className="py-1.5 px-2 text-right">
+                      <Button
+                        variant="secondary"
+                        className="text-[11px] py-0.5 px-2"
+                        data-testid="apply-short-id"
+                        onClick={() => applyProposalMut.mutate(["short_id"])}
+                      >
+                        Áp dụng
+                      </Button>
+                    </td>
+                  </tr>
+                  {c.profile_proposal.palette && (
+                    <tr>
+                      <td className="py-1.5 px-2 text-gray-300 font-medium">Bảng màu</td>
+                      <td className="py-1.5 px-2 text-gray-400">—</td>
+                      <td className="py-1.5 px-2 text-emerald-300" colSpan={2}>
+                        {c.profile_proposal.palette.join(", ")}
+                      </td>
+                    </tr>
+                  )}
+                  {c.profile_proposal.distinctive && (
+                    <tr>
+                      <td className="py-1.5 px-2 text-gray-300 font-medium">Đặc điểm nhận dạng</td>
+                      <td className="py-1.5 px-2 text-gray-400">—</td>
+                      <td className="py-1.5 px-2 text-emerald-300" colSpan={2}>
+                        {c.profile_proposal.distinctive.join("; ")}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
       </div>
 
       {/* Row 4: Outfits & Character Sheets */}
-      <div className="space-y-3 pt-2 border-t border-border/60">
-        <div className="flex items-center justify-between">
-          <span className="text-sm font-semibold text-gray-200">Danh sách trang phục</span>
+      {c.is_group ? (
+        <div className="p-3 text-xs text-gray-500 italic bg-background/20 rounded-lg border border-border/40">
+          Nhân vật nhóm không dùng bảng mẫu (sheet).
         </div>
+      ) : (
+        <div className="space-y-3 pt-2 border-t border-border/60">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-semibold text-gray-200">Danh sách trang phục</span>
+          </div>
 
-        {/* Add outfit form */}
-        <form
-          className="flex flex-wrap gap-2 items-center bg-background/50 p-2.5 rounded-lg border border-border"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (newOutfitName.trim()) {
-              createOutfit.mutate({
-                name_vi: newOutfitName.trim(),
-                outfit_lock: newOutfitLock.trim(),
-                short_id: newOutfitShortId.trim(),
-                is_default: outfits.length === 0,
-              });
-              setNewOutfitName("");
-              setNewOutfitLock("");
-              setNewOutfitShortId("");
-            }
-          }}
-        >
-          <input
-            className={`${input} w-44`}
-            placeholder="Tên trang phục (vd: Áo đen)"
-            value={newOutfitName}
-            onChange={(e) => setNewOutfitName(e.target.value)}
-          />
-          <input
-            className={`${input} flex-1 min-w-[12rem]`}
-            placeholder="Khóa trang phục (outfit_lock: black robe with gold trim)"
-            value={newOutfitLock}
-            onChange={(e) => setNewOutfitLock(e.target.value)}
-          />
-          <input
-            className={`${input} w-40`}
-            placeholder="Tên ngắn (3-6 từ)"
-            value={newOutfitShortId}
-            onChange={(e) => setNewOutfitShortId(e.target.value)}
-          />
-          <Button variant="primary" type="submit" disabled={!newOutfitName.trim() || createOutfit.isPending}>
-            <Plus className="w-3.5 h-3.5" /> Thêm trang phục
-          </Button>
-        </form>
+          {/* Add outfit form */}
+          <form
+            className="flex flex-wrap gap-2 items-center bg-background/50 p-2.5 rounded-lg border border-border"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (newOutfitName.trim()) {
+                createOutfit.mutate({
+                  name_vi: newOutfitName.trim(),
+                  outfit_lock: newOutfitLock.trim(),
+                  short_id: newOutfitShortId.trim(),
+                  is_default: outfits.length === 0,
+                });
+                setNewOutfitName("");
+                setNewOutfitLock("");
+                setNewOutfitShortId("");
+              }
+            }}
+          >
+            <input
+              className={`${input} w-44`}
+              placeholder="Tên trang phục (vd: Áo đen)"
+              value={newOutfitName}
+              onChange={(e) => setNewOutfitName(e.target.value)}
+            />
+            <input
+              className={`${input} flex-1 min-w-[12rem]`}
+              placeholder="Khóa trang phục (outfit_lock: black robe with gold trim)"
+              value={newOutfitLock}
+              onChange={(e) => setNewOutfitLock(e.target.value)}
+            />
+            <input
+              className={`${input} w-40`}
+              placeholder="Tên ngắn (3-6 từ)"
+              value={newOutfitShortId}
+              onChange={(e) => setNewOutfitShortId(e.target.value)}
+            />
+            <Button variant="primary" type="submit" disabled={!newOutfitName.trim() || createOutfit.isPending}>
+              <Plus className="w-3.5 h-3.5" /> Thêm trang phục
+            </Button>
+          </form>
 
-        {/* Outfits list */}
-        <div className="space-y-3">
-          {outfits.map((o) => (
-            <div key={o.id} className="rounded-lg border border-border/70 bg-background/30 p-3 space-y-2">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex flex-wrap items-center gap-2">
+          {/* Outfits list */}
+          <div className="space-y-3">
+            {outfits.map((o) => (
+              <div key={o.id} className="rounded-lg border border-border/70 bg-background/30 p-3 space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <InlineText
+                      value={o.name_vi}
+                      className="w-40 font-medium"
+                      onSave={(v) => v.trim() && updateOutfit.mutate({ oid: o.id, patch: { name_vi: v } })}
+                    />
+                    <span className="font-mono text-xs text-gray-500 w-24 truncate">{o.key}</span>
+                    {o.is_default ? (
+                      <span className="inline-flex items-center gap-1 text-amber-300 text-xs font-semibold px-2 py-0.5 rounded bg-amber-950/60 border border-amber-800">
+                        <Star className="w-3 h-3 fill-amber-300" /> Mặc định
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => updateOutfit.mutate({ oid: o.id, patch: { is_default: true } })}
+                        className="text-xs text-gray-400 hover:text-gray-200 underline"
+                      >
+                        Đặt làm mặc định
+                      </button>
+                    )}
+                    <InlineText
+                      value={o.short_id ?? ""}
+                      className="w-36"
+                      placeholder="short_id (3-6 từ)…"
+                      onSave={(v) => updateOutfit.mutate({ oid: o.id, patch: { short_id: v } })}
+                    />
+                  </div>
+
+                  <Button
+                    variant="danger"
+                    title="Xóa trang phục"
+                    disabled={o.is_default && outfits.filter((x) => x.is_default).length <= 1}
+                    onClick={() =>
+                      window.confirm(`Xóa trang phục "${o.name_vi}"?`) && delOutfit.mutate(o.id)
+                    }
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </Button>
+                </div>
+
+                <div>
                   <InlineText
-                    value={o.name_vi}
-                    className="w-40 font-medium"
-                    onSave={(v) => v.trim() && updateOutfit.mutate({ oid: o.id, patch: { name_vi: v } })}
-                  />
-                  <span className="font-mono text-xs text-gray-500 w-24 truncate">{o.key}</span>
-                  {o.is_default ? (
-                    <span className="inline-flex items-center gap-1 text-amber-300 text-xs font-semibold px-2 py-0.5 rounded bg-amber-950/60 border border-amber-800">
-                      <Star className="w-3 h-3 fill-amber-300" /> Mặc định
-                    </span>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => updateOutfit.mutate({ oid: o.id, patch: { is_default: true } })}
-                      className="text-xs text-gray-400 hover:text-gray-200 underline"
-                    >
-                      Đặt làm mặc định
-                    </button>
-                  )}
-                  <InlineText
-                    value={o.short_id ?? ""}
-                    className="w-36"
-                    placeholder="short_id (3-6 từ)…"
-                    onSave={(v) => updateOutfit.mutate({ oid: o.id, patch: { short_id: v } })}
+                    value={o.outfit_lock ?? ""}
+                    className="w-full text-xs"
+                    placeholder="Mô tả trang phục (outfit_lock: black robe, gold belt, sword on back…)"
+                    onSave={(v) => updateOutfit.mutate({ oid: o.id, patch: { outfit_lock: v } })}
                   />
                 </div>
 
-                <Button
-                  variant="danger"
-                  title="Xóa trang phục"
-                  disabled={o.is_default && outfits.filter((x) => x.is_default).length <= 1}
-                  onClick={() =>
-                    window.confirm(`Xóa trang phục "${o.name_vi}"?`) && delOutfit.mutate(o.id)
-                  }
-                >
-                  <Trash2 className="w-3 h-3" />
-                </Button>
-              </div>
-
-              <div>
-                <InlineText
-                  value={o.outfit_lock ?? ""}
-                  className="w-full text-xs"
-                  placeholder="Mô tả trang phục (outfit_lock: black robe, gold belt, sword on back…)"
-                  onSave={(v) => updateOutfit.mutate({ oid: o.id, patch: { outfit_lock: v } })}
+                {/* Sheet block for this outfit */}
+                <SheetBlock
+                  target="outfits"
+                  id={o.id}
+                  sheetStatus={o.sheet_status}
+                  sheetUrl={o.sheet_url}
+                  refFrameCount={refs.length}
+                  onRefresh={onUpdated}
                 />
               </div>
-
-              {/* Sheet block for this outfit */}
-              <SheetBlock
-                target="outfits"
-                id={o.id}
-                sheetStatus={o.sheet_status}
-                sheetUrl={o.sheet_url}
-                refFrameCount={refIds.length}
-                onRefresh={onUpdated}
-              />
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
-      </div>
+      )}
+
+      {/* Crop Ref Modal */}
+      {cropModalOpen && (
+        <CropRefModal
+          chid={c.id}
+          suggestions={suggestions.data ?? []}
+          initialFrameId={selectedCropFrameId}
+          outfits={outfits}
+          onClose={() => setCropModalOpen(false)}
+          onSuccess={onUpdated}
+        />
+      )}
     </div>
   );
 }

@@ -291,7 +291,15 @@ Ends on: {end_state}.
 - Giới hạn `video_prompt` ≤ 90 từ (Muse bỏ qua phần đuôi prompt dài). Vượt → cảnh báo, rút gọn phần nhận diện trước.
 - Nhiều nhân vật cùng hành động: viết theo thứ tự thời gian, mỗi nhịp một chủ thể chính.
 
-**Cổng sheet**: task keyframe/khung nối của shot có nhân vật **chưa có sheet đã duyệt** ở trạng thái `blocked` (lý do: "Thiếu bảng nhân vật X"), người dùng có thể bấm **"Làm không cần sheet"** cho từng task.
+**Thứ tự đính kèm ảnh cho keyframe** (Nano Banana):
+- `attach_asset_ids` được sắp xếp theo thứ tự ưu tiên:
+  1. Khung truyện nguồn (`comic panel`).
+  2. Sheet trang phục của nhân vật chính (`main`).
+  3. Sheet trang phục của nhân vật phụ (`supporting`) nếu còn chỗ.
+  - Tổng số ảnh đính kèm tối đa là `settings.max_ref_images` (mặc định 4 ảnh).
+  - Nhân vật quần chúng (`extra`) và nhân vật nhóm (`is_group=true`) không có sheet và không đính kèm ảnh tham chiếu, chỉ được mô tả bằng chữ trong prompt.
+
+**Cổng sheet**: task keyframe/khung nối của shot có nhân vật **chưa có sheet đã duyệt** ở trạng thái `blocked` (lý do: "Thiếu bảng nhân vật X"), người dùng có thể bấm **"Làm không cần sheet"** cho từng task. Nhân vật nhóm (`is_group=true`) được bỏ qua cổng sheet.
 
 ---
 
@@ -344,12 +352,13 @@ Bổ sung (Phase 2a): `frame_type` (§4.5); mỗi phần tử `texts[]` thêm `l
 ```
 
 ### 5.2 Story Bible (project-level)
-> Từ Phase 2b, nhân vật & bối cảnh là **bảng trong DB** (nguồn chính); `bible.json` chỉ là bản xuất. Trường mới cho lớp khóa 1 (§4.6):
+> Từ Phase 2b/2b1, nhân vật & bối cảnh là **bảng trong DB** (nguồn chính); `bible.json` chỉ là bản xuất. Trường mới cho lớp khóa 1 (§4.6):
 >
-> - `Character`: `look_lock` (EN, ≤ 60 từ — **chỉ đặc điểm cố định**: khuôn mặt, tóc, mắt, vóc dáng, nước da, dấu hiệu đặc biệt; *không* có quần áo), `height_class` (`child|short|average|tall|giant`), `ref_frame_ids` (2–4 khung rõ nhân vật nhất, AI gợi ý từ `read`, người dùng chọn), `look_status` (`draft|approved`).
-> - `CharacterOutfit` (mới): `id, character_id, key, name_vi, outfit_lock` (EN — quần áo, phụ kiện, vũ khí), `short_id` (EN 3–6 từ), `is_default`, `sheet_asset_id`, `sheet_status` (`missing|pending|approved`), `note` (vd "từ chương 120, sau khi bị thương"). Mỗi nhân vật ≥ 1 trang phục mặc định.
-> - `Location` (mới): `id, project_id, key, name_vi, aliases, location_lock` (EN — kiến trúc, vật liệu, bảng màu, ánh sáng, thời điểm), `ref_frame_ids`, `sheet_asset_id`, `sheet_status`. `Scene.location_key` trỏ tới đây.
-> - Asset mới: `char_sheet` (1 ảnh/trang phục: chính diện, 3/4, nghiêng, sau lưng + cận mặt, nền trơn), `location_sheet` (toàn cảnh + góc ngược lại).
+> - `Character`: `look_lock` (EN, ≤ 60 từ — **chỉ đặc điểm cố định**: khuôn mặt, tóc, mắt, vóc dáng, nước da, dấu hiệu đặc biệt; *không* có quần áo), `height_class` (`child|short|average|tall|giant`), `ref_frame_ids` (legacy), `look_status` (`draft|approved`), `role` (`main|supporting|extra`, mặc định `supporting`), `role_source` (`ai|user`), `is_group` (bool), `group_size_hint` (text, vd "2–3 người"), `profile_proposal` (JSON từ AI, so sánh và áp dụng thủ công).
+> - `CharacterRef` (mới, bảng `character_refs`): `id` (prefix "RF"), `character_id`, `outfit_id` (nullable), `asset_id`, `source_frame_id` (nullable), `crop` (`{x0, y0, x1, y1}`, nullable, tọa độ pixel ảnh gốc, tối thiểu 64×64px), `note`, `order`.
+> - `CharacterOutfit`: `id, character_id, key, name_vi, outfit_lock` (EN — quần áo, phụ kiện, vũ khí), `short_id` (EN 3–6 từ), `is_default`, `sheet_asset_id`, `sheet_status` (`missing|pending|approved`), `note`. Gói sheet-bundle của trang phục dùng các `char_ref` của nhân vật (ưu tiên ref gắn đúng outfit) thay cho nguyên khung. Nhân vật nhóm (`is_group=true`) không có sheet.
+> - `Location`: `id, project_id, key, name_vi, aliases, location_lock` (EN — kiến trúc, vật liệu, bảng màu, ánh sáng, thời điểm), `ref_frame_ids` (2–4 khung), `sheet_asset_id`, `sheet_status`. `Scene.location_key` trỏ tới đây.
+> - Asset: `char_ref` (ảnh tham chiếu cắt hoặc tải lên, JPEG ≤ 1600px, lưu `projects/<pid>/refs/<character_key>/refs/ref_N.jpg`), `char_sheet` (1 ảnh/trang phục: chính diện, 3/4, nghiêng, sau lưng + cận mặt, nền trơn), `location_sheet` (toàn cảnh + góc ngược lại).
 ```json
 {
   "schema_version": 1,
