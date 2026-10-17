@@ -58,27 +58,41 @@ test("phase 2b: character cards, look_lock, ref frames, sheet upload and approva
   const charCard = page.getByTestId("character-row").first();
   await expect(charCard).toBeVisible();
 
-  // Nhập look_lock
+  // 1. Cắt 1 vùng từ khung tham chiếu
+  const cropBtn = charCard.getByTestId("crop-ref-btn");
+  await cropBtn.click();
+
+  const saveCropBtn = page.getByTestId("save-crop-btn");
+  await expect(saveCropBtn).toBeVisible({ timeout: 10_000 });
+  await saveCropBtn.click();
+
+  // 2. Thấy ảnh tham chiếu xuất hiện
+  const refItem = charCard.getByTestId("char-ref-item");
+  await expect(refItem).toHaveCount(1, { timeout: 15_000 });
+
+  // 3. Chạy AI hồ sơ (fake)
+  const aiBtn = charCard.getByTestId("ai-look-profile-btn");
+  await aiBtn.click();
+
+  // Chờ bảng đề xuất hiện lên
+  const applyLookBtn = charCard.getByTestId("apply-look-lock");
+  await expect(applyLookBtn).toBeVisible({ timeout: 20_000 });
+
+  // 4. Áp dụng look_lock
+  await applyLookBtn.click();
   const lookInput = charCard.getByTestId("look-lock-input");
-  await lookInput.fill("young man, long black hair tied high, sharp red eyes, slim but athletic");
-  await lookInput.blur();
+  await expect(lookInput).toHaveValue(/sharp red eyes/);
 
-  // Chọn 2 khung tham chiếu
-  const thumbs = charCard.getByTestId("ref-frame-thumb");
-  await expect(thumbs).toHaveCount(2, { timeout: 15_000 });
-  await thumbs.nth(0).click();
-  await thumbs.nth(1).click();
-
-  // Thả 1 ảnh sheet (dùng e2e/fixtures/001.png)
+  // 5. Thả 1 ảnh sheet (dùng e2e/fixtures/001.png)
   const sheetInput = charCard.getByTestId("sheet-file-input");
   await sheetInput.setInputFiles(join(fixtures, "001.png"));
 
-  // Duyệt sheet
+  // 6. Duyệt sheet
   const approveBtn = charCard.getByTestId("sheet-approve-btn");
   await expect(approveBtn).toBeVisible({ timeout: 15_000 });
   await approveBtn.click();
 
-  // Thấy "Đã duyệt"
+  // 7. Thấy "Đã duyệt"
   await expect(charCard.getByTestId("sheet-status")).toHaveText("Đã duyệt");
 
   // Chụp màn hình vào e2e/screenshots/bible.png

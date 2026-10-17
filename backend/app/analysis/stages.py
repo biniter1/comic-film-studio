@@ -33,6 +33,21 @@ from app.providers.base import ImagePart, ProviderRequest
 from app.storage import asset_abs_path, chapter_dir
 
 PROMPT_VERSION = "v2"
+PROMPT_VERSION_READ = "v3"
+PROMPT_VERSION_DIALOGUE = "v2"
+PROMPT_VERSION_LOOK_PROFILE = "v1"
+
+
+def prompt_version_for(stage: str) -> str:
+    if stage == "read":
+        return PROMPT_VERSION_READ
+    if stage == "dialogue":
+        return PROMPT_VERSION_DIALOGUE
+    if stage == "character_profile":
+        return PROMPT_VERSION_LOOK_PROFILE
+    return PROMPT_VERSION
+
+
 READ_BATCH = 6
 DIALOGUE_CHUNK = 150
 DIALOGUE_CONTEXT = 10
@@ -220,7 +235,7 @@ def build_read_request(
     req = ProviderRequest(
         stage="read",
         model=settings.analysis_model_vision,
-        system=load_prompt("read", PROMPT_VERSION),
+        system=load_prompt("read", PROMPT_VERSION_READ),
         user_text=user,
         images=images,
     )
@@ -295,6 +310,10 @@ def apply_read_unit(
                 gender=nc.gender,
                 age_group=nc.age_group,
                 voice_style=nc.voice_style,
+                role=getattr(nc, "role", "supporting") or "supporting",
+                role_source="ai",
+                is_group=bool(getattr(nc, "is_group", False)),
+                group_size_hint=getattr(nc, "group_size_hint", None),
             )
             s.add(char)
             s.flush()
@@ -360,7 +379,7 @@ def _upsert_run(s: Session, cid: str, stage: str, unit_index: int, **kw: Any) ->
     run.error = kw.get("error")
     run.provider = kw.get("provider", run.provider)
     run.model = kw.get("model", run.model)
-    run.prompt_version = PROMPT_VERSION
+    run.prompt_version = prompt_version_for(stage)
     if "payload" in kw:
         run.payload = {**(run.payload or {}), **kw["payload"]}
     if run.status in ("succeeded", "failed"):
@@ -382,10 +401,56 @@ def compute_anchor(frames: list[Frame], i: int, direction: str) -> str | None:
     return None
 
 
+def suggest_character_roles(s: Session, pid: str) -> None:
+    """Rule 3: Suggest roles automatically after read:
+    main >=3 lines or >=5 frames, supporting >0 lines, extra 0 lines.
+    """
+    chars = s.exec(select(Character).where(Character.project_id == pid)).all()
+    if not chars:
+        return
+    chap_ids = [ch.id for ch in s.exec(select(Chapter).where(Chapter.project_id == pid)).all()]
+    if not chap_ids:
+        return
+
+    lines = s.exec(select(DialogueLine).where(DialogueLine.chapter_id.in_(chap_ids))).all()
+    line_counts: dict[str, int] = {}
+    for d in lines:
+        if d.speaker_key:
+            line_counts[d.speaker_key] = line_counts.get(d.speaker_key, 0) + 1
+
+    frames = s.exec(select(Frame).where(Frame.chapter_id.in_(chap_ids))).all()
+    frame_counts: dict[str, int] = {}
+    for f in frames:
+        reading = f.reading or {}
+        char_keys = reading.get("characters") or []
+        for ck in char_keys:
+            frame_counts[ck] = frame_counts.get(ck, 0) + 1
+
+    for c in chars:
+        if c.role_source == "user":
+            continue
+        if c.is_group:
+            c.role = "extra"
+            c.role_source = "ai"
+            s.add(c)
+            continue
+        n_lines = line_counts.get(c.key, 0)
+        n_frames = frame_counts.get(c.key, 0)
+        if n_lines >= 3 or n_frames >= 5:
+            c.role = "main"
+        elif n_lines > 0:
+            c.role = "supporting"
+        else:
+            c.role = "extra"
+        c.role_source = "ai"
+        s.add(c)
+
+
 def finalize_read(cid: str) -> None:
     """Global reading order, anchors, speaker sanity. Safe to call repeatedly."""
     with _session() as s:
         ch = _chapter(s, cid)
+        suggest_character_roles(s, ch.project_id)
         recompute_anchors(s, cid)
         keys = {c.key for c in _characters(s, ch.project_id)}
         for d in s.exec(select(DialogueLine).where(DialogueLine.chapter_id == cid)):

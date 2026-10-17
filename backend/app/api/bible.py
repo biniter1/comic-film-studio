@@ -2,7 +2,7 @@
 
 from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, File, Response, UploadFile
+from fastapi import APIRouter, File, Form, Response, UploadFile
 from pydantic import BaseModel, Field
 
 from app.errors import AppError
@@ -142,3 +142,61 @@ def reject_sheet(target: str, id: str) -> dict[str, Any]:
     if target not in ("outfits", "locations"):
         raise AppError("INVALID_TARGET", f"Mục tiêu '{target}' không hợp lệ", status_code=400)
     return svc.reject_sheet(target, id)  # type: ignore[arg-type]
+
+
+# --- Character References & Look Profile ---------------------------------------
+class CropIn(BaseModel):
+    frame_id: str
+    x0: int
+    y0: int
+    x1: int
+    y1: int
+    outfit_id: Optional[str] = None
+    note: Optional[str] = None
+
+
+class RefPatch(BaseModel):
+    outfit_id: Optional[str] = None
+    order: Optional[int] = None
+    note: Optional[str] = None
+
+
+@router.post("/characters/{chid}/refs/crop", status_code=201)
+def crop_character_ref(chid: str, body: CropIn) -> dict[str, Any]:
+    return svc.create_character_ref_from_crop(
+        chid, body.frame_id, body.x0, body.y0, body.x1, body.y1, body.outfit_id, body.note
+    )
+
+
+@router.post("/characters/{chid}/refs/upload", status_code=201)
+def upload_character_ref(
+    chid: str,
+    file: UploadFile = File(...),
+    outfit_id: Optional[str] = Form(None),
+    note: Optional[str] = Form(None),
+) -> dict[str, Any]:
+    content = file.file.read(MAX_IMAGE_BYTES + 1)
+    if len(content) > MAX_IMAGE_BYTES:
+        max_mb = MAX_IMAGE_BYTES // (1024 * 1024)
+        raise AppError("FILE_TOO_LARGE", f"Ảnh quá lớn (tối đa {max_mb} MB)", status_code=413)
+    return svc.create_character_ref_from_upload(chid, content, outfit_id, note)
+
+
+@router.get("/characters/{chid}/refs")
+def list_character_refs(chid: str) -> list[dict[str, Any]]:
+    return svc.list_character_refs(chid)
+
+
+@router.delete("/refs/{rid}")
+def delete_character_ref(rid: str) -> dict[str, Any]:
+    return svc.delete_character_ref(rid)
+
+
+@router.patch("/refs/{rid}")
+def update_character_ref(rid: str, body: RefPatch) -> dict[str, Any]:
+    return svc.update_character_ref(rid, body.model_dump(exclude_unset=True))
+
+
+@router.post("/characters/{chid}/look-profile")
+def request_look_profile(chid: str) -> dict[str, Any]:
+    return svc.enqueue_look_profile(chid)

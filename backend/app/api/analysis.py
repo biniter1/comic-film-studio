@@ -10,7 +10,7 @@ from sqlmodel import Session, select
 from app import db
 from app.analysis import stages
 from app.analysis.engine import extract_json
-from app.analysis.schemas import Age, FrameType, Gender, TermKind, TextKind
+from app.analysis.schemas import Age, FrameType, Gender, Role, TermKind, TextKind
 from app.errors import AppError
 from app.jobs.runner import job_service
 from app.models.analysis import AnalysisRun
@@ -398,6 +398,10 @@ class CharacterIn(BaseModel):
     ref_frame_ids: list[str] = []
     look_status: LookStatus = "draft"
     status: Literal["suggested", "approved", "rejected"] = "approved"
+    role: Role = "supporting"
+    role_source: Literal["ai", "user"] = "user"
+    is_group: bool = False
+    group_size_hint: Optional[str] = None
 
 
 class CharacterPatch(BaseModel):
@@ -411,6 +415,15 @@ class CharacterPatch(BaseModel):
     height_class: Optional[HeightClass] = None
     ref_frame_ids: Optional[list[str]] = None
     look_status: Optional[LookStatus] = None
+    role: Optional[Role] = None
+    role_source: Optional[Literal["ai", "user"]] = None
+    is_group: Optional[bool] = None
+    group_size_hint: Optional[str] = None
+    profile_proposal: Optional[dict[str, Any]] = None
+
+
+class ApplyProposalIn(BaseModel):
+    fields: Optional[list[str]] = None
 
 
 @router.get("/projects/{pid}/characters")
@@ -436,3 +449,8 @@ def delete_character(chid: str) -> dict[str, Any]:
 @router.post("/characters/{chid}/merge")
 def merge_character(chid: str, body: MergeIn) -> dict[str, Any]:
     return svc.merge_character(chid, body.into_id)
+
+
+@router.post("/characters/{chid}/apply-proposal")
+def apply_proposal(chid: str, body: ApplyProposalIn) -> dict[str, Any]:
+    return svc.apply_proposal(chid, body.fields)

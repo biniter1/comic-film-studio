@@ -12,6 +12,8 @@ Gender = Literal["male", "female", "unknown"]
 Age = Literal["child", "teen", "young_adult", "middle_aged", "elderly", "unknown"]
 BelongsTo = Literal["self", "prev", "next"]
 TermKind = Literal["person", "place", "technique", "realm", "sect", "item", "title", "other"]
+Role = Literal["main", "supporting", "extra"]
+HeightClass = Literal["child", "short", "average", "tall", "giant"]
 
 
 def _clean_enum_str(v: Any) -> Any:
@@ -78,6 +80,49 @@ def normalize_term_kind(v: Any) -> Any:
     if not s:
         return "other"
     return s
+
+
+def normalize_role(v: Any) -> Any:
+    if v is None or (isinstance(v, str) and not v.strip()):
+        return "supporting"
+    s = _clean_enum_str(v)
+    synonyms = {
+        "chinh": "main",
+        "primary": "main",
+        "protagonist": "main",
+        "phu": "supporting",
+        "secondary": "supporting",
+        "quan_chung": "extra",
+        "background": "extra",
+        "crowd": "extra",
+    }
+    return synonyms.get(s, s)
+
+
+def normalize_bool(v: Any) -> bool:
+    if isinstance(v, str):
+        s = v.strip().lower()
+        if s in ("true", "1", "yes", "t"):
+            return True
+        if s in ("false", "0", "no", "f"):
+            return False
+    return bool(v)
+
+
+def normalize_height_class(v: Any) -> Any:
+    if v is None or (isinstance(v, str) and not v.strip()):
+        return "average"
+    s = _clean_enum_str(v)
+    synonyms = {
+        "medium": "average",
+        "normal": "average",
+        "tall": "tall",
+        "short": "short",
+        "child": "child",
+        "giant": "giant",
+        "huge": "giant",
+    }
+    return synonyms.get(s, s)
 
 
 class ReadText(BaseModel):
@@ -169,6 +214,9 @@ class NewCharacter(BaseModel):
     gender: Gender = "unknown"
     age_group: Age = "unknown"
     voice_style: Optional[str] = None
+    role: Role = "supporting"
+    is_group: bool = False
+    group_size_hint: Optional[str] = None
 
     @field_validator("gender", mode="before")
     @classmethod
@@ -179,6 +227,46 @@ class NewCharacter(BaseModel):
     @classmethod
     def _validate_age(cls, v: Any) -> Any:
         return normalize_age(v)
+
+    @field_validator("role", mode="before")
+    @classmethod
+    def _validate_role(cls, v: Any) -> Any:
+        return normalize_role(v)
+
+    @field_validator("is_group", mode="before")
+    @classmethod
+    def _validate_is_group(cls, v: Any) -> Any:
+        return normalize_bool(v)
+
+
+class LookProfileOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    look_lock: str = Field(min_length=1)
+    outfit_lock: str = Field(min_length=1)
+    short_id: str = Field(min_length=1)
+    height_class: HeightClass = "average"
+    palette: list[str] = Field(default_factory=list)
+    distinctive: list[str] = Field(default_factory=list)
+
+    @field_validator("height_class", mode="before")
+    @classmethod
+    def _validate_height_class(cls, v: Any) -> Any:
+        return normalize_height_class(v)
+
+    @field_validator("palette", mode="before")
+    @classmethod
+    def _validate_palette(cls, v: Any) -> list[str]:
+        if not isinstance(v, list):
+            return []
+        return [str(x) for x in v][:5]
+
+    @field_validator("distinctive", mode="before")
+    @classmethod
+    def _validate_distinctive(cls, v: Any) -> list[str]:
+        if not isinstance(v, list):
+            return []
+        return [str(x) for x in v][:5]
 
 
 class ReadBatchOut(BaseModel):

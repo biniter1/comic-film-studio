@@ -161,17 +161,25 @@ def test_sheet_bundle_outfit_and_location(client: TestClient):
     outfits = client.get(f"/api/characters/{chid}/outfits").json()
     oid = outfits[0]["id"]
 
-    # 409 when ref_frame_ids is empty
+    # 409 when refs is empty
     b1 = client.get(f"/api/outfits/{oid}/sheet-bundle")
     assert b1.status_code == 409
-    assert "Chọn 2–4 khung tham chiếu trước" in b1.json()["error"]["message_vi"]
+    assert "ảnh tham chiếu" in b1.json()["error"]["message_vi"]
 
-    # Set 2 ref frames on character
-    patch_c = client.patch(
-        f"/api/characters/{chid}",
-        json={"ref_frame_ids": [frames[0], frames[1]]},
+    # Crop 2 refs for character
+    r1 = client.post(
+        f"/api/characters/{chid}/refs/crop",
+        json={"frame_id": frames[0], "x0": 0, "y0": 0, "x1": 100, "y1": 100},
     )
-    assert patch_c.status_code == 200
+    assert r1.status_code == 201
+    ref1_id = r1.json()["id"]
+
+    r2 = client.post(
+        f"/api/characters/{chid}/refs/crop",
+        json={"frame_id": frames[1], "x0": 10, "y0": 10, "x1": 120, "y1": 120},
+    )
+    assert r2.status_code == 201
+    ref2_id = r2.json()["id"]
 
     # Also set outfit_lock
     client.patch(
@@ -188,8 +196,8 @@ def test_sheet_bundle_outfit_and_location(client: TestClient):
         namelist = zf.namelist()
         assert "prompt.txt" in namelist
         assert "HUONG_DAN.txt" in namelist
-        assert f"01_{frames[0]}.jpg" in namelist
-        assert f"02_{frames[1]}.jpg" in namelist
+        assert f"01_{ref1_id}.jpg" in namelist
+        assert f"02_{ref2_id}.jpg" in namelist
 
         prompt_txt = zf.read("prompt.txt").decode("utf-8")
         assert "young man, black ponytail, sharp red eyes" in prompt_txt
