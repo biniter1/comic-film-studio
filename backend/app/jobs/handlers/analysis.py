@@ -36,6 +36,41 @@ def _run_stage(ctx: JobContext, stage: str) -> None:
     units = units_fn(cid)
     label = "khung" if stage == "read" else "câu"
     ctx.log(f"{stage}: {len(units)} phần việc, provider={provider.name}")
+
+    with Session(db.engine) as s:
+        existing_succeeded = list(
+            s.exec(
+                select(AnalysisRun).where(
+                    AnalysisRun.chapter_id == cid,
+                    AnalysisRun.stage == stage,
+                    AnalysisRun.status == "succeeded",
+                )
+            ).all()
+        )
+        for r in sorted(existing_succeeded, key=lambda x: x.unit_index):
+            ctx.log(f"phần {r.unit_index + 1}: đã có kết quả, bỏ qua")
+            targets = (r.payload or {}).get("targets", [])
+            output = (r.payload or {}).get("output")
+            if stage == "read" and output and targets:
+                existing_lines = s.exec(
+                    select(DialogueLine).where(
+                        DialogueLine.chapter_id == cid,
+                        DialogueLine.source_frame_id.in_(targets),
+                    )
+                ).first()
+                expected_texts = any(len(f.get("texts", [])) > 0 for f in output.get("frames", []))
+                if expected_texts and not existing_lines:
+                    out = schema.model_validate(output)
+                    apply_fn(
+                        cid,
+                        r.unit_index,
+                        out,
+                        mode=r.mode,
+                        attempts=r.attempts,
+                        ih=r.input_hash,
+                        targets=targets,
+                    )
+
     if not units:
         finalize(cid)
         return
@@ -46,20 +81,23 @@ def _run_stage(ctx: JobContext, stage: str) -> None:
         targets = units[i]
 
         with Session(db.engine) as s:
-            existing_run = s.exec(
+            existing_runs = s.exec(
                 select(AnalysisRun).where(
                     AnalysisRun.chapter_id == cid,
                     AnalysisRun.stage == stage,
-                    AnalysisRun.unit_index == i,
                 )
-            ).first()
+            ).all()
+            matching_run = next(
+                (
+                    r
+                    for r in existing_runs
+                    if (r.payload or {}).get("targets") == targets and r.status == "succeeded"
+                ),
+                None,
+            )
 
-            if (
-                existing_run
-                and existing_run.status == "succeeded"
-                and (existing_run.payload or {}).get("targets") == targets
-            ):
-                if stage == "read" and existing_run.payload.get("output"):
+            if matching_run:
+                if stage == "read" and matching_run.payload.get("output"):
                     existing_lines = s.exec(
                         select(DialogueLine).where(
                             DialogueLine.chapter_id == cid,
@@ -68,22 +106,23 @@ def _run_stage(ctx: JobContext, stage: str) -> None:
                     ).first()
                     expected_texts = any(
                         len(f.get("texts", [])) > 0
-                        for f in existing_run.payload["output"].get("frames", [])
+                        for f in matching_run.payload["output"].get("frames", [])
                     )
                     if expected_texts and not existing_lines:
-                        out = schema.model_validate(existing_run.payload["output"])
+                        out = schema.model_validate(matching_run.payload["output"])
                         apply_fn(
                             cid,
-                            i,
+                            matching_run.unit_index,
                             out,
-                            mode=existing_run.mode,
-                            attempts=existing_run.attempts,
-                            ih=existing_run.input_hash,
+                            mode=matching_run.mode,
+                            attempts=matching_run.attempts,
+                            ih=matching_run.input_hash,
+                            targets=targets,
                         )
                 ctx.log(f"phần {i + 1}: đã có kết quả, bỏ qua")
                 continue
 
-        req, built_targets = build(cid, i)
+        req, built_targets = build(cid, i, targets=targets)
         try:
             out, attempts, ih = call_structured(
                 provider,
@@ -95,7 +134,7 @@ def _run_stage(ctx: JobContext, stage: str) -> None:
             )
         except ProviderError as e:
             raise JobError(e.category, e.message_vi, e.user_action_required) from e
-        apply_fn(cid, i, out, mode="api", attempts=attempts, ih=ih)
+        apply_fn(cid, i, out, mode="api", attempts=attempts, ih=ih, targets=built_targets)
         ctx.log(
             f"  phần {i + 1}: ok sau {attempts} lần gọi"
             if attempts

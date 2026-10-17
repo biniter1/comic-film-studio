@@ -93,27 +93,24 @@ def get_dialogue(cid: str) -> dict[str, Any]:
         runs = s.exec(select(AnalysisRun).where(AnalysisRun.chapter_id == cid)).all()
         busy = active_chapter_job(s, cid)
         pending_review = sum(1 for d in lines if d.needs_review and not d.reviewed)
-        r_units = stages.read_units(cid)
-        total_read_units = len(r_units)
-        succeeded_read_units = 0
-        for idx, targets in enumerate(r_units):
-            matching_run = next(
-                (
-                    r
-                    for r in runs
-                    if r.stage == "read"
-                    and r.unit_index == idx
-                    and r.status == "succeeded"
-                    and (r.payload or {}).get("targets") == targets
-                ),
-                None,
-            )
-            if matching_run:
-                succeeded_read_units += 1
+        all_frames = stages._frames(s, cid)
+        read_frame_ids = stages.get_read_frame_ids(s, cid)
+        unread_frames = [f for f in all_frames if f.id not in read_frame_ids]
+        remaining_units = stages.read_units(cid)
+        succeeded_read_runs = [
+            r
+            for r in runs
+            if r.stage == "read" and r.status == "succeeded" and (r.payload or {}).get("targets")
+        ]
+        total_units = len(succeeded_read_runs) + len(remaining_units)
+        succeeded_units = len(succeeded_read_runs)
 
         read_progress = {
-            "succeeded": succeeded_read_units,
-            "total": total_read_units,
+            "succeeded": succeeded_units,
+            "total": total_units,
+            "unread_frames": len(unread_frames),
+            "total_frames": len(all_frames),
+            "remaining_units": len(remaining_units),
         }
         return {
             "chapter_id": cid,

@@ -626,12 +626,21 @@ def put_frames(cid: str, ranges: list[tuple[int, int]]) -> dict[str, Any]:
             _create_frame(ch, strip, i, y0, y1, "manual")
     with _session() as s:
         c = s.get(Chapter, cid)
-        assert c
+        from app.analysis import stages
+
+        unread_units = stages.read_units(cid)
+        has_unread = len(unread_units) > 0
         has_script = c.status in ("dialogue_draft", "dialogue_approved")
         if has_script:
-            from app.analysis.stages import recompute_anchors
+            stages.recompute_anchors(s, cid)
 
-            recompute_anchors(s, cid)
+        if has_unread:
+            # Còn khung chưa đọc → không để chapter ở dialogue_draft như thể đã xong
+            analyzable = ("frames_approved", "dialogue_draft", "dialogue_approved")
+            c.status = (
+                "frames_approved" if (has_script or c.status in analyzable) else "frames_draft"
+            )
+        elif has_script:
             c.status = "dialogue_draft"
         elif changed or c.status not in ("frames_approved", "dialogue_draft", "dialogue_approved"):
             c.status = "frames_draft"

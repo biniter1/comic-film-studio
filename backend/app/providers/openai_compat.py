@@ -40,6 +40,17 @@ def classify_openai_error(status_code: int | None, response_text: str) -> Provid
         )
 
     if status_code == 429:
+        daily_pat = r"per ?day|PerDay|daily|quota.*exceeded.*(day|free)|day_limit"
+        if re.search(daily_pat, err_msg, re.I):
+            hint = (
+                "Đã dùng hết hạn mức trong ngày của API key. Vui lòng đổi API key khác "
+                "trong Cài đặt hoặc chờ đến ngày mai."
+            )
+            return ProviderError(
+                "quota",
+                "Đã dùng hết hạn mức trong ngày của API key",
+                hint,
+            )
         return ProviderError(
             "transient",
             "OpenAI Compat đang giới hạn tốc độ (429), sẽ thử lại",
@@ -97,6 +108,11 @@ class OpenAICompatProvider:
         return headers
 
     def generate(self, req: ProviderRequest) -> str:
+        from app.providers.retry import call_with_retry
+
+        return call_with_retry(lambda: self._generate_once(req), provider_name="OpenAICompat")
+
+    def _generate_once(self, req: ProviderRequest) -> str:
         messages: list[dict[str, Any]] = []
         if req.system:
             messages.append({"role": "system", "content": req.system})

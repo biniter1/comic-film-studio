@@ -114,6 +114,9 @@ export interface UnitInfo {
 export interface ReadProgress {
   succeeded: number;
   total: number;
+  unread_frames?: number;
+  total_frames?: number;
+  remaining_units?: number;
 }
 
 export interface DialogueData {

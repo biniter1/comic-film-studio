@@ -195,18 +195,10 @@ def test_edit_frame_in_package_3_reruns_only_package_3(c):
     read_job_2 = r2.json()["jobs"][0]["id"]
     wait_job(c, read_job_2)
 
-    # Provider should ONLY be called for package 3 (unit index 2) => exactly 1 call!
+    # Provider should ONLY be called for the edited frame => exactly 1 call!
     assert len(calls) == 1
     call_targets = targets_of(calls[0])
-    assert new_frame_15_id in call_targets
-    assert call_targets == [
-        frame_ids[12],
-        frame_ids[13],
-        new_frame_15_id,
-        frame_ids[15],
-        frame_ids[16],
-        frame_ids[17],
-    ]
+    assert call_targets == [new_frame_15_id]
 
     job_logs = c.get(f"/api/jobs/{read_job_2}/log").text
     assert "phần 1: đã có kết quả, bỏ qua" in job_logs
@@ -436,3 +428,221 @@ def test_dialogue_incremental_and_repolish_all(c):
     assert r_diag3.status_code == 200
     wait_job(c, r_diag3.json()["jobs"][0]["id"])
     assert len(calls) == first_run_calls
+
+
+def test_tech_lead_mandatory_18_frames_drop_split_add(c: TestClient):
+    """BẮT BUỘC TEST (Tech Lead Part A):
+
+    đọc 18 khung (3 gói) → bỏ khung thứ 2 → bấm Phân tích → KHÔNG gọi provider lần nào;
+    cắt 1 khung thành 2 → chỉ gọi 1 lần đúng 2 khung mới;
+    thêm khung mới ở cuối → 1 lần 1 khung.
+    """
+    pid, cid = new_chapter(c)
+    cdir = chapter_dir(pid, cid)
+    asset_file = cdir / "frames" / "dummy.png"
+    asset_file.parent.mkdir(parents=True, exist_ok=True)
+    img = Image.new("RGB", (100, 100), color=(128, 128, 128))
+    img.save(asset_file, "PNG")
+
+    with Session(db.engine) as s:
+        ch = s.get(Chapter, cid)
+        assert ch
+        ch.status = "frames_approved"
+        s.add(ch)
+
+        asset = Asset(
+            project_id=pid,
+            chapter_id=cid,
+            kind="frame",
+            path=f"chapters/{cid}/frames/dummy.png",
+            mime_type="image/png",
+            size_bytes=1000,
+        )
+        s.add(asset)
+        s.flush()
+
+        frame_ids = []
+        for i in range(1, 19):
+            fid = f"FR_{cid}_{i:03d}"
+            frame_ids.append(fid)
+            s.add(
+                Frame(
+                    id=fid,
+                    chapter_id=cid,
+                    idx=i,
+                    asset_id=asset.id,
+                    x0=0,
+                    y0=(i - 1) * 10,
+                    x1=100,
+                    y1=i * 10,
+                )
+            )
+        s.commit()
+
+    calls: list[ProviderRequest] = []
+
+    def scripted_respond(req: ProviderRequest) -> str:
+        calls.append(req)
+        targets = targets_of(req)
+        specs = {
+            fid: {
+                "type": "scene",
+                "texts": [line(1, f"Thoại khung {fid}", speaker=None, speaker_label="nhân vật")],
+            }
+            for fid in targets
+        }
+        return Script(specs)(req)
+
+    fake = FakeProvider(scripted_respond)
+    registry.factory = lambda: fake
+
+    # 1. Đọc 18 khung (3 gói vì 18 / 6 = 3)
+    r = c.post(f"/api/chapters/{cid}/analysis/read", json={"mode": "api", "then_dialogue": False})
+    assert r.status_code == 200
+    wait_job(c, r.json()["jobs"][0]["id"])
+    assert len(calls) == 3
+    assert targets_of(calls[0]) == frame_ids[0:6]
+    assert targets_of(calls[1]) == frame_ids[6:12]
+    assert targets_of(calls[2]) == frame_ids[12:18]
+
+    # Kiểm tra trạng thái chapter và read_progress
+    d_info = c.get(f"/api/chapters/{cid}/dialogue").json()
+    assert d_info["status"] == "dialogue_draft"
+    assert d_info["read_progress"]["unread_frames"] == 0
+
+    # 2. Bỏ khung thứ 2 (frame_ids[1])
+    f2_id = frame_ids[1]
+    with Session(db.engine) as s:
+        for d in s.exec(select(DialogueLine).where(DialogueLine.source_frame_id == f2_id)):
+            s.delete(d)
+        for d in s.exec(select(DialogueLine).where(DialogueLine.anchor_frame_id == f2_id)):
+            d.anchor_frame_id = None
+            s.add(d)
+        f2 = s.get(Frame, f2_id)
+        assert f2
+        s.delete(f2)
+        remaining_frames = s.exec(
+            select(Frame).where(Frame.chapter_id == cid).order_by(Frame.idx)
+        ).all()
+        for idx_val, f in enumerate(remaining_frames, 1):
+            f.idx = idx_val
+            s.add(f)
+        s.commit()
+
+    # Bấm Phân tích → KHÔNG gọi provider lần nào
+    calls.clear()
+    r = c.post(f"/api/chapters/{cid}/analysis/read", json={"mode": "api", "then_dialogue": False})
+    assert r.status_code == 200
+    wait_job(c, r.json()["jobs"][0]["id"])
+    assert len(calls) == 0
+
+    # 3. Cắt 1 khung thành 2 (cắt frame_ids[2] thành f3a và f3b)
+    f3_id = frame_ids[2]
+    f3a_id = f"FR_{cid}_003a"
+    f3b_id = f"FR_{cid}_003b"
+    with Session(db.engine) as s:
+        f3 = s.get(Frame, f3_id)
+        assert f3
+        asset_id = f3.asset_id
+        for d in s.exec(select(DialogueLine).where(DialogueLine.source_frame_id == f3_id)):
+            s.delete(d)
+        for d in s.exec(select(DialogueLine).where(DialogueLine.anchor_frame_id == f3_id)):
+            d.anchor_frame_id = None
+            s.add(d)
+        s.delete(f3)
+        s.add(
+            Frame(
+                id=f3a_id,
+                chapter_id=cid,
+                idx=2,
+                asset_id=asset_id,
+                x0=0,
+                y0=20,
+                x1=100,
+                y1=25,
+            )
+        )
+        s.add(
+            Frame(
+                id=f3b_id,
+                chapter_id=cid,
+                idx=3,
+                asset_id=asset_id,
+                x0=0,
+                y0=25,
+                x1=100,
+                y1=30,
+            )
+        )
+        remaining_frames = s.exec(
+            select(Frame).where(Frame.chapter_id == cid).order_by(Frame.idx)
+        ).all()
+        for idx_val, f in enumerate(remaining_frames, 1):
+            f.idx = idx_val
+            s.add(f)
+        s.commit()
+
+    # Dialogue API kiểm tra còn 2 khung chưa đọc
+    d_info_split = c.get(f"/api/chapters/{cid}/dialogue").json()
+    assert d_info_split["read_progress"]["unread_frames"] == 2
+
+    # Bấm Phân tích → chỉ gọi 1 lần đúng 2 khung mới
+    calls.clear()
+    r = c.post(f"/api/chapters/{cid}/analysis/read", json={"mode": "api", "then_dialogue": False})
+    assert r.status_code == 200
+    wait_job(c, r.json()["jobs"][0]["id"])
+    assert len(calls) == 1
+    assert targets_of(calls[0]) == [f3a_id, f3b_id]
+
+    # 4. Thêm khung mới ở cuối → 1 lần 1 khung
+    f_new_end = f"FR_{cid}_end"
+    with Session(db.engine) as s:
+        s.add(
+            Frame(
+                id=f_new_end,
+                chapter_id=cid,
+                idx=20,
+                asset_id=asset_id,
+                x0=0,
+                y0=180,
+                x1=100,
+                y1=190,
+            )
+        )
+        s.commit()
+
+    # Bấm Phân tích → 1 lần 1 khung
+    calls.clear()
+    r = c.post(f"/api/chapters/{cid}/analysis/read", json={"mode": "api", "then_dialogue": False})
+    assert r.status_code == 200
+    wait_job(c, r.json()["jobs"][0]["id"])
+    assert len(calls) == 1
+    assert targets_of(calls[0]) == [f_new_end]
+
+
+def test_dialogue_cancelled_when_read_fails(c: TestClient):
+    """Item 5: analysis_dialogue cancelled when analysis_read failed or cancelled."""
+    pid, cid, _, _ = create_chapter_with_84_frames(c)
+
+    def failing_respond(req: ProviderRequest) -> str:
+        raise ProviderError("permanent", "Gemini API key không hợp lệ")
+
+    fake = FakeProvider(failing_respond)
+    registry.factory = lambda: fake
+
+    # Start read with default then_dialogue=True
+    r = c.post(f"/api/chapters/{cid}/analysis/read", json={"mode": "api", "then_dialogue": True})
+    assert r.status_code == 200
+    jobs = r.json()["jobs"]
+    assert len(jobs) == 2
+    read_job_id = jobs[0]["id"]
+    dialogue_job_id = jobs[1]["id"]
+
+    # Wait for read job to fail
+    read_res = wait_job(c, read_job_id)
+    assert read_res["status"] == "failed"
+
+    # Wait for dialogue job; it must be cancelled
+    diag_res = wait_job(c, dialogue_job_id)
+    assert diag_res["status"] == "cancelled"
+    assert "Bị hủy do job đọc trước đó" in (diag_res.get("error_message") or "")

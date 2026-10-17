@@ -103,32 +103,36 @@ def _set_status(cid: str, status: str) -> None:
 # ===========================================================================
 # READ
 # ===========================================================================
+def get_read_frame_ids(s: Session, cid: str) -> set[str]:
+    """Return frame IDs that are in targets of an AnalysisRun read succeeded (with output)."""
+    runs = s.exec(
+        select(AnalysisRun).where(
+            AnalysisRun.chapter_id == cid,
+            AnalysisRun.stage == "read",
+            AnalysisRun.status == "succeeded",
+        )
+    ).all()
+    read_ids: set[str] = set()
+    for r in runs:
+        if (r.payload or {}).get("output"):
+            for fid in (r.payload or {}).get("targets", []):
+                read_ids.add(fid)
+    return read_ids
+
+
 def read_units(cid: str) -> list[list[str]]:
     with _session() as s:
         frames = _frames(s, cid)
-        ids = [f.id for f in frames]
-        if not ids:
+        if not frames:
             return []
-
-        runs = s.exec(
-            select(AnalysisRun)
-            .where(AnalysisRun.chapter_id == cid, AnalysisRun.stage == "read")
-            .order_by(AnalysisRun.unit_index)
-        ).all()
-
-        id_set = set(ids)
-        if runs and all((r.payload or {}).get("targets") for r in runs):
-            all_prev_targets = [fid for r in runs for fid in (r.payload or {}).get("targets", [])]
-            # If current frames are a subset of previous targets (removal only, no new frame IDs):
-            if set(ids) <= set(all_prev_targets):
-                units = []
-                for r in runs:
-                    t = [fid for fid in (r.payload or {}).get("targets", []) if fid in id_set]
-                    if t:
-                        units.append(t)
-                return units
-
-    return [ids[i : i + READ_BATCH] for i in range(0, len(ids), READ_BATCH)]
+        read_ids = get_read_frame_ids(s, cid)
+        unread = [f for f in frames if f.id not in read_ids]
+        if not unread:
+            return []
+        batch_size = max(4, min(12, getattr(settings, "read_batch_size", 6)))
+        return [
+            [f.id for f in unread[i : i + batch_size]] for i in range(0, len(unread), batch_size)
+        ]
 
 
 def reset_dialogue(cid: str) -> int:
@@ -158,12 +162,16 @@ def reset_dialogue(cid: str) -> int:
         return len(lines)
 
 
-def build_read_request(cid: str, unit_index: int) -> tuple[ProviderRequest, list[str]]:
+def build_read_request(
+    cid: str, unit_index: int, targets: list[str] | None = None
+) -> tuple[ProviderRequest, list[str]]:
     with _session() as s:
         ch = _chapter(s, cid)
         frames = _frames(s, cid)
         ids = [f.id for f in frames]
-        targets = read_units(cid)[unit_index]
+        if targets is None:
+            units = read_units(cid)
+            targets = units[unit_index]
         first, last = ids.index(targets[0]), ids.index(targets[-1])
         ctx_prev = frames[first - 1] if first > 0 else None
         ctx_next = frames[last + 1] if last + 1 < len(frames) else None
@@ -175,18 +183,20 @@ def build_read_request(cid: str, unit_index: int) -> tuple[ProviderRequest, list
             return ImagePart(f"FRAME {f.id} ({role})", asset_abs_path(ch.project_id, a.path))
 
         images = []
-        if ctx_prev:
+        if ctx_prev and ctx_prev.id not in targets:
             images.append(img(ctx_prev, "CONTEXT — previous frame, do not return"))
         images += [img(by_id[i], "TARGET") for i in targets]
-        if ctx_next:
+        if ctx_next and ctx_next.id not in targets:
             images.append(img(ctx_next, "CONTEXT — next frame, do not return"))
 
         prev_run = s.exec(
-            select(AnalysisRun).where(
+            select(AnalysisRun)
+            .where(
                 AnalysisRun.chapter_id == cid,
                 AnalysisRun.stage == "read",
-                AnalysisRun.unit_index == unit_index - 1,
+                AnalysisRun.status == "succeeded",
             )
+            .order_by(AnalysisRun.unit_index.desc())
         ).first()
         summary = (prev_run.payload or {}).get("summary", "") if prev_run else ""
         chars = [
@@ -198,7 +208,7 @@ def build_read_request(cid: str, unit_index: int) -> tuple[ProviderRequest, list
     user = json.dumps(
         {
             "TARGET_FRAMES": targets,
-            "CONTEXT_FRAMES": [f.id for f in (ctx_prev, ctx_next) if f],
+            "CONTEXT_FRAMES": [f.id for f in (ctx_prev, ctx_next) if f and f.id not in targets],
             "KNOWN_CHARACTERS": chars,
             "GLOSSARY": terms,
             "RUNNING_SUMMARY": summary or "Start of chapter.",
@@ -226,15 +236,24 @@ def read_validator(targets: list[str]):
 
 
 def apply_read_unit(
-    cid: str, unit_index: int, out: ReadBatchOut, *, mode: str, attempts: int, ih: str | None
+    cid: str,
+    unit_index: int,
+    out: ReadBatchOut,
+    *,
+    mode: str,
+    attempts: int,
+    ih: str | None,
+    targets: list[str] | None = None,
 ) -> None:
     with _session() as s:
         ch = _chapter(s, cid)
         frames = {f.id: f for f in _frames(s, cid)}
-        targets = [fr.frame_id for fr in out.frames]
-        for d in s.exec(select(DialogueLine).where(DialogueLine.source_frame_id.in_(targets))):
+        target_fids = targets if targets is not None else [fr.frame_id for fr in out.frames]
+        for d in s.exec(select(DialogueLine).where(DialogueLine.source_frame_id.in_(target_fids))):
             s.delete(d)
         for fr in out.frames:
+            if fr.frame_id not in frames:
+                continue
             f = frames[fr.frame_id]
             f.reading = fr.model_dump(mode="json", exclude={"texts"})
             if f.frame_type_source != "user":
@@ -290,17 +309,34 @@ def apply_read_unit(
                 )
             )
             known.add(nc.key)
+
+        existing_runs = s.exec(
+            select(AnalysisRun).where(
+                AnalysisRun.chapter_id == cid,
+                AnalysisRun.stage == "read",
+            )
+        ).all()
+        matched = next(
+            (r for r in existing_runs if (r.payload or {}).get("targets") == target_fids),
+            None,
+        )
+        target_unit_index = (
+            matched.unit_index
+            if matched
+            else (max((r.unit_index for r in existing_runs), default=-1) + 1)
+        )
+
         _upsert_run(
             s,
             cid,
             "read",
-            unit_index,
+            target_unit_index,
             mode=mode,
             status="succeeded",
             attempts=attempts,
             ih=ih,
             payload={
-                "targets": targets,
+                "targets": target_fids,
                 "summary": out.running_summary,
                 "output": out.model_dump(mode="json"),
             },
@@ -356,7 +392,12 @@ def finalize_read(cid: str) -> None:
                 d.speaker_label = d.speaker_label or d.speaker_key
                 d.speaker_key = None
                 s.add(d)
-        ch.status = "dialogue_draft"
+
+        unread = len(read_units(cid)) > 0
+        if unread:
+            ch.status = "frames_approved"
+        else:
+            ch.status = "dialogue_draft"
         ch.updated_at = _now()
         s.add(ch)
         s.commit()
@@ -413,8 +454,11 @@ def _speaker_name(d: DialogueLine, names: dict[str, str]) -> str:
     return d.speaker_label or ("(dẫn truyện)" if d.kind == "narration" else "(không rõ)")
 
 
-def build_dialogue_request(cid: str, unit_index: int) -> tuple[ProviderRequest, list[str]]:
-    targets = dialogue_units(cid)[unit_index]
+def build_dialogue_request(
+    cid: str, unit_index: int, targets: list[str] | None = None
+) -> tuple[ProviderRequest, list[str]]:
+    if targets is None:
+        targets = dialogue_units(cid)[unit_index]
     with _session() as s:
         ch = _chapter(s, cid)
         chars = _characters(s, ch.project_id)
@@ -516,7 +560,14 @@ def needs_review_for(raw: str, new: str, note: str | None) -> bool:
 
 
 def apply_dialogue_unit(
-    cid: str, unit_index: int, out: DialogueOut, *, mode: str, attempts: int, ih: str | None
+    cid: str,
+    unit_index: int,
+    out: DialogueOut,
+    *,
+    mode: str,
+    attempts: int,
+    ih: str | None,
+    targets: list[str] | None = None,
 ) -> None:
     with _session() as s:
         ch = _chapter(s, cid)
@@ -535,17 +586,35 @@ def apply_dialogue_unit(
             s.add(d)
         merge_glossary_candidates(s, ch.project_id, cid, out.glossary_candidates)
         merge_address_candidates(s, ch.project_id, out.address_candidates)
+
+        target_ids = targets if targets is not None else list(edits)
+        existing_runs = s.exec(
+            select(AnalysisRun).where(
+                AnalysisRun.chapter_id == cid,
+                AnalysisRun.stage == "dialogue",
+            )
+        ).all()
+        matched = next(
+            (r for r in existing_runs if (r.payload or {}).get("targets") == target_ids),
+            None,
+        )
+        target_unit_index = (
+            matched.unit_index
+            if matched
+            else (max((r.unit_index for r in existing_runs), default=-1) + 1)
+        )
+
         _upsert_run(
             s,
             cid,
             "dialogue",
-            unit_index,
+            target_unit_index,
             mode=mode,
             status="succeeded",
             attempts=attempts,
             ih=ih,
             payload={
-                "targets": list(edits),
+                "targets": target_ids,
                 "output": out.model_dump(mode="json"),
             },
         )
@@ -617,31 +686,36 @@ def prepare_manual(cid: str, stage: str, force_all: bool = False) -> list[dict[s
             ):
                 s.delete(r)
             s.flush()
+        existing_runs = list(
+            s.exec(
+                select(AnalysisRun).where(AnalysisRun.chapter_id == cid, AnalysisRun.stage == stage)
+            ).all()
+        )
         for i, targets in enumerate(units):
-            existing = s.exec(
-                select(AnalysisRun).where(
-                    AnalysisRun.chapter_id == cid,
-                    AnalysisRun.stage == stage,
-                    AnalysisRun.unit_index == i,
-                )
-            ).first()
-            if (
-                existing
-                and existing.status == "succeeded"
-                and (existing.payload or {}).get("targets") == targets
-            ):
+            matching = next(
+                (r for r in existing_runs if (r.payload or {}).get("targets") == targets),
+                None,
+            )
+            if matching and matching.status == "succeeded":
                 continue
-            _upsert_run(
+            unit_idx = (
+                matching.unit_index
+                if matching
+                else (max((r.unit_index for r in existing_runs), default=-1) + 1)
+            )
+            run = _upsert_run(
                 s,
                 cid,
                 stage,
-                i,
+                unit_idx,
                 mode="manual",
                 status="awaiting_paste",
                 attempts=0,
                 ih=None,
                 payload={"targets": targets},
             )
+            if not matching:
+                existing_runs.append(run)
         s.commit()
     return list_units(cid, stage)
 
@@ -685,7 +759,8 @@ def manual_bundle(run_id: str) -> Path:
             raise AppError("RUN_NOT_FOUND", "Không tìm thấy phần việc", status_code=404)
         cid, stage, unit = run.chapter_id, run.stage, run.unit_index
         ch = _chapter(s, cid)
-    req, _targets = STAGES[stage][1](cid, unit)
+        targets = (run.payload or {}).get("targets")
+    req, _targets = STAGES[stage][1](cid, unit, targets=targets)
     out = work_dir(ch) / "manual" / f"{stage}_{unit + 1:02d}.zip"
     out.parent.mkdir(parents=True, exist_ok=True)
     prompt = (
@@ -717,8 +792,9 @@ def manual_paste(run_id: str, raw: str) -> dict[str, Any]:
             raise AppError("RUN_NOT_FOUND", "Không tìm thấy phần việc", status_code=404)
         cid, stage, unit = run.chapter_id, run.stage, run.unit_index
         ch = _chapter(s, cid)
+        targets = (run.payload or {}).get("targets")
     _units, build, validator, schema, apply_fn, finalize = STAGES[stage]
-    _req, targets = build(cid, unit)
+    _req, targets = build(cid, unit, targets=targets)
     raw_dir = work_dir(ch) / "raw"
     raw_dir.mkdir(exist_ok=True)
     (raw_dir / f"{stage}_manual_{unit + 1:02d}.txt").write_text(raw, encoding="utf-8")
@@ -731,7 +807,7 @@ def manual_paste(run_id: str, raw: str) -> dict[str, Any]:
         raise AppError(
             "INVALID_OUTPUT", "Kết quả dán vào chưa đúng định dạng", {"error": str(e)[:2000]}, 422
         )
-    apply_fn(cid, unit, out, mode="manual", attempts=1, ih=None)
+    apply_fn(cid, unit, out, mode="manual", attempts=1, ih=None, targets=targets)
     units = list_units(cid, stage)
     if all(u["status"] == "succeeded" for u in units):
         finalize(cid)

@@ -5,16 +5,23 @@ import re
 from app.frames.images import _jpeg_bytes
 from app.providers.base import ProviderError, ProviderRequest
 
-QUOTA_HINT = "Hết hạn mức Gemini. Dùng chế độ thủ công hoặc chờ hạn mức được làm mới."
+DAILY_QUOTA_HINT = (
+    "Đã dùng hết hạn mức trong ngày của API key. Vui lòng đổi API key khác "
+    "trong Cài đặt, dùng chế độ thủ công hoặc chờ đến ngày mai (Google reset lúc 14:00 giờ VN)."
+)
 
 
 def classify_client_error(code: int | None, message: str) -> ProviderError:
     msg = message or ""
     if code == 429 or "RESOURCE_EXHAUSTED" in msg:
-        # Daily / project quota → stop; per-minute rate limit → retry later
-        if re.search(r"per ?day|PerDay|daily|quota.*exceeded.*(day|free)", msg, re.I):
-            return ProviderError("quota", "Đã hết hạn mức Gemini trong ngày", QUOTA_HINT)
+        daily_pat = r"per ?day|PerDay|daily|quota.*exceeded.*(day|free)|quota_exceeded|day_limit"
+        if re.search(daily_pat, msg, re.I):
+            return ProviderError(
+                "quota", "Đã dùng hết hạn mức trong ngày của API key", DAILY_QUOTA_HINT
+            )
         return ProviderError("transient", "Gemini đang giới hạn tốc độ (429), sẽ thử lại")
+    if code in (500, 502, 503, 504):
+        return ProviderError("transient", f"Máy chủ Gemini lỗi ({code}), sẽ thử lại")
     if code in (401, 403):
         return ProviderError(
             "permanent",
@@ -41,7 +48,7 @@ class GeminiProvider:
         self._genai = genai
         self.client = genai.Client(api_key=api_key)
 
-    def generate(self, req: ProviderRequest) -> str:
+    def _generate_once(self, req: ProviderRequest) -> str:
         from google.genai import errors, types
 
         parts: list = [types.Part.from_text(text=req.user_text)]
@@ -76,3 +83,8 @@ class GeminiProvider:
                 pass
             raise ProviderError("invalid_output", f"Gemini không trả nội dung {reason}".strip())
         return text
+
+    def generate(self, req: ProviderRequest) -> str:
+        from app.providers.retry import call_with_retry
+
+        return call_with_retry(lambda: self._generate_once(req), provider_name="Gemini")

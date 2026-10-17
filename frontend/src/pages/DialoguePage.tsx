@@ -107,6 +107,7 @@ export function DialoguePage() {
   const readProgress = d?.read_progress;
   const totalUnits = readProgress?.total ?? 0;
   const succeededUnits = readProgress?.succeeded ?? 0;
+  const unreadFrames = readProgress?.unread_frames ?? 0;
 
   const handleRereadAll = () => {
     const est = totalUnits || 1;
@@ -132,7 +133,15 @@ export function DialoguePage() {
                 ← Khung
               </Link>
               {status && <StatusBadge status={status as never} />}
-              {totalUnits > 0 && (
+              {unreadFrames > 0 && (
+                <span
+                  className="text-xs font-semibold px-2 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/20"
+                  data-testid="unread-frames-badge"
+                >
+                  Còn {unreadFrames} khung chưa đọc
+                </span>
+              )}
+              {unreadFrames === 0 && totalUnits > 0 && (
                 <span
                   className="text-xs font-semibold px-2 py-0.5 rounded bg-gray-800 text-sky-300 border border-gray-700"
                   data-testid="read-progress-badge"
@@ -162,10 +171,16 @@ export function DialoguePage() {
               disabled={!canAnalyze || busy || start.isPending}
               onClick={() => start.mutate({ stage: "read", force_all: false })}
               data-testid="analyze-btn"
-              title="Chạy tiếp các gói còn thiếu (không gọi lại phần việc đã xong)"
+              title={
+                unreadFrames > 0
+                  ? `Đọc ${unreadFrames} khung còn lại (không gọi lại phần việc đã xong)`
+                  : "Chạy tiếp các gói còn thiếu (không gọi lại phần việc đã xong)"
+              }
             >
               <Sparkles className="w-4 h-4" />{" "}
-              {succeededUnits > 0 && succeededUnits < totalUnits
+              {unreadFrames > 0
+                ? `Đọc ${unreadFrames} khung còn lại`
+                : succeededUnits > 0 && succeededUnits < totalUnits
                 ? "Chạy tiếp"
                 : succeededUnits > 0 && succeededUnits === totalUnits
                 ? "Phân tích"

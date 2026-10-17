@@ -191,10 +191,11 @@ def test_frame_changes_vs_script(c):
     assert [x["source_frame_id"] for x in d["lines"]] == frames[1:]
     assert d["lines"][0]["anchor_frame_id"] == frames[2]
     assert [x["order"] for x in d["lines"]] == [1, 2]
-    # a changed range removes only the affected frame's lines; unaffected frames and status survive
+    # a changed range removes only the affected frame's lines; unaffected frames survive;
+    # status becomes frames_approved because the changed frame is unread
     changed = [dict(ranges[1], y1=ranges[1]["y1"] - 10), ranges[2]]
     d = put(changed)
-    assert d["status"] == "dialogue_draft"
+    assert d["status"] == "frames_approved"
     assert [x["source_frame_id"] for x in d["lines"]] == [frames[2]]
 
 
