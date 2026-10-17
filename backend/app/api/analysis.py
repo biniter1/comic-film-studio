@@ -29,6 +29,7 @@ class AnalysisIn(BaseModel):
     mode: Literal["api", "manual"] = "api"
     # read via API: also queue the dialogue polish right after it (default)
     then_dialogue: bool = True
+    force_all: bool = False
 
 
 class PasteIn(BaseModel):
@@ -64,17 +65,35 @@ def start_analysis(cid: str, stage: Stage, body: AnalysisIn) -> dict[str, Any]:
             "READ_FIRST", "Chạy bước đọc truyện trước khi biên tập thoại", status_code=409
         )
     if body.mode == "manual":
-        return {"mode": "manual", "stage": stage, "units": stages.prepare_manual(cid, stage)}
+        return {
+            "mode": "manual",
+            "stage": stage,
+            "units": stages.prepare_manual(cid, stage, force_all=body.force_all),
+        }
     jobs = []
     if stage == "read":
-        read = job_service.enqueue("analysis_read", {"chapter_id": cid})
+        if body.force_all:
+            stages.reset_dialogue(cid)
+        read = job_service.enqueue(
+            "analysis_read", {"chapter_id": cid, "force_all": body.force_all}
+        )
         jobs.append(read)
         if body.then_dialogue:
             jobs.append(
-                job_service.enqueue("analysis_dialogue", {"chapter_id": cid}, depends_on=[read.id])
+                job_service.enqueue(
+                    "analysis_dialogue",
+                    {"chapter_id": cid, "force_all": body.force_all},
+                    depends_on=[read.id],
+                )
             )
     else:
-        jobs.append(job_service.enqueue("analysis_dialogue", {"chapter_id": cid}))
+        if body.force_all:
+            stages.reset_dialogue_runs(cid)
+        jobs.append(
+            job_service.enqueue(
+                "analysis_dialogue", {"chapter_id": cid, "force_all": body.force_all}
+            )
+        )
     return {
         "mode": "api",
         "stage": stage,

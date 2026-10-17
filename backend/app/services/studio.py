@@ -589,11 +589,6 @@ def put_frames(cid: str, ranges: list[tuple[int, int]]) -> dict[str, Any]:
         existing = {(f.y0, f.y1): f for f in s.exec(select(Frame).where(Frame.chapter_id == cid))}
         keep = set(ranges)
         changed = set(existing) != keep
-        # Only removing frames (e.g. a translator banner) keeps the script: just the removed
-        # frames' lines go. New/changed ranges → the analysis no longer matches → drop it.
-        removal_only = changed and keep <= set(existing)
-        if changed and not removal_only:
-            drop_analysis(s, cid)
         removed = [f for key, f in existing.items() if key not in keep]
         if removed:
             gone = {f.id for f in removed}
@@ -604,6 +599,16 @@ def put_frames(cid: str, ranges: list[tuple[int, int]]) -> dict[str, Any]:
                     d.anchor_frame_id = None
                     d.anchor_locked = False
                     s.add(d)
+            for r in s.exec(
+                select(AnalysisRun).where(
+                    AnalysisRun.chapter_id == cid, AnalysisRun.stage == "read"
+                )
+            ):
+                cur_targets = (r.payload or {}).get("targets", [])
+                new_targets = [fid for fid in cur_targets if fid not in gone]
+                if len(new_targets) != len(cur_targets):
+                    r.payload = {**(r.payload or {}), "targets": new_targets}
+                    s.add(r)
             s.flush()
         for f in removed:
             s.delete(f)
@@ -621,12 +626,21 @@ def put_frames(cid: str, ranges: list[tuple[int, int]]) -> dict[str, Any]:
             _create_frame(ch, strip, i, y0, y1, "manual")
     with _session() as s:
         c = s.get(Chapter, cid)
-        assert c
-        has_script = c.status in ("dialogue_draft", "dialogue_approved")
-        if removal_only and has_script:
-            from app.analysis.stages import recompute_anchors
+        from app.analysis import stages
 
-            recompute_anchors(s, cid)
+        unread_units = stages.read_units(cid)
+        has_unread = len(unread_units) > 0
+        has_script = c.status in ("dialogue_draft", "dialogue_approved")
+        if has_script:
+            stages.recompute_anchors(s, cid)
+
+        if has_unread:
+            # Còn khung chưa đọc → không để chapter ở dialogue_draft như thể đã xong
+            analyzable = ("frames_approved", "dialogue_draft", "dialogue_approved")
+            c.status = (
+                "frames_approved" if (has_script or c.status in analyzable) else "frames_draft"
+            )
+        elif has_script:
             c.status = "dialogue_draft"
         elif changed or c.status not in ("frames_approved", "dialogue_draft", "dialogue_approved"):
             c.status = "frames_draft"

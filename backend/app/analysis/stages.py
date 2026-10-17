@@ -6,6 +6,7 @@ by the API provider (job) or pasted by the user (manual mode) — both go throug
 """
 
 import json
+import shutil
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -102,16 +103,46 @@ def _set_status(cid: str, status: str) -> None:
 # ===========================================================================
 # READ
 # ===========================================================================
+def get_read_frame_ids(s: Session, cid: str) -> set[str]:
+    """Return frame IDs that are in targets of an AnalysisRun read succeeded (with output)."""
+    runs = s.exec(
+        select(AnalysisRun).where(
+            AnalysisRun.chapter_id == cid,
+            AnalysisRun.stage == "read",
+            AnalysisRun.status == "succeeded",
+        )
+    ).all()
+    read_ids: set[str] = set()
+    for r in runs:
+        # Runs from before outputs were stored have no payload["output"]; their dialogue lines
+        # are already in the DB, so they still count as read (re-reading them costs credits).
+        for fid in (r.payload or {}).get("targets", []):
+            read_ids.add(fid)
+    return read_ids
+
+
 def read_units(cid: str) -> list[list[str]]:
     with _session() as s:
-        ids = [f.id for f in _frames(s, cid)]
-    return [ids[i : i + READ_BATCH] for i in range(0, len(ids), READ_BATCH)]
+        frames = _frames(s, cid)
+        if not frames:
+            return []
+        read_ids = get_read_frame_ids(s, cid)
+        unread = [f for f in frames if f.id not in read_ids]
+        if not unread:
+            return []
+        batch_size = max(4, min(12, getattr(settings, "read_batch_size", 6)))
+        return [
+            [f.id for f in unread[i : i + batch_size]] for i in range(0, len(unread), batch_size)
+        ]
 
 
 def reset_dialogue(cid: str) -> int:
     """Start a fresh read: back up existing lines, then delete them and old runs."""
     with _session() as s:
         ch = _chapter(s, cid)
+        cache = work_dir(ch) / "cache"
+        if cache.exists():
+            shutil.rmtree(cache, ignore_errors=True)
         lines = list(s.exec(select(DialogueLine).where(DialogueLine.chapter_id == cid)))
         if lines:
             hist = work_dir(ch) / "history"
@@ -132,12 +163,16 @@ def reset_dialogue(cid: str) -> int:
         return len(lines)
 
 
-def build_read_request(cid: str, unit_index: int) -> tuple[ProviderRequest, list[str]]:
+def build_read_request(
+    cid: str, unit_index: int, targets: list[str] | None = None
+) -> tuple[ProviderRequest, list[str]]:
     with _session() as s:
         ch = _chapter(s, cid)
         frames = _frames(s, cid)
         ids = [f.id for f in frames]
-        targets = read_units(cid)[unit_index]
+        if targets is None:
+            units = read_units(cid)
+            targets = units[unit_index]
         first, last = ids.index(targets[0]), ids.index(targets[-1])
         ctx_prev = frames[first - 1] if first > 0 else None
         ctx_next = frames[last + 1] if last + 1 < len(frames) else None
@@ -149,18 +184,20 @@ def build_read_request(cid: str, unit_index: int) -> tuple[ProviderRequest, list
             return ImagePart(f"FRAME {f.id} ({role})", asset_abs_path(ch.project_id, a.path))
 
         images = []
-        if ctx_prev:
+        if ctx_prev and ctx_prev.id not in targets:
             images.append(img(ctx_prev, "CONTEXT — previous frame, do not return"))
         images += [img(by_id[i], "TARGET") for i in targets]
-        if ctx_next:
+        if ctx_next and ctx_next.id not in targets:
             images.append(img(ctx_next, "CONTEXT — next frame, do not return"))
 
         prev_run = s.exec(
-            select(AnalysisRun).where(
+            select(AnalysisRun)
+            .where(
                 AnalysisRun.chapter_id == cid,
                 AnalysisRun.stage == "read",
-                AnalysisRun.unit_index == unit_index - 1,
+                AnalysisRun.status == "succeeded",
             )
+            .order_by(AnalysisRun.unit_index.desc())
         ).first()
         summary = (prev_run.payload or {}).get("summary", "") if prev_run else ""
         chars = [
@@ -172,7 +209,7 @@ def build_read_request(cid: str, unit_index: int) -> tuple[ProviderRequest, list
     user = json.dumps(
         {
             "TARGET_FRAMES": targets,
-            "CONTEXT_FRAMES": [f.id for f in (ctx_prev, ctx_next) if f],
+            "CONTEXT_FRAMES": [f.id for f in (ctx_prev, ctx_next) if f and f.id not in targets],
             "KNOWN_CHARACTERS": chars,
             "GLOSSARY": terms,
             "RUNNING_SUMMARY": summary or "Start of chapter.",
@@ -200,15 +237,24 @@ def read_validator(targets: list[str]):
 
 
 def apply_read_unit(
-    cid: str, unit_index: int, out: ReadBatchOut, *, mode: str, attempts: int, ih: str | None
+    cid: str,
+    unit_index: int,
+    out: ReadBatchOut,
+    *,
+    mode: str,
+    attempts: int,
+    ih: str | None,
+    targets: list[str] | None = None,
 ) -> None:
     with _session() as s:
         ch = _chapter(s, cid)
         frames = {f.id: f for f in _frames(s, cid)}
-        targets = [fr.frame_id for fr in out.frames]
-        for d in s.exec(select(DialogueLine).where(DialogueLine.source_frame_id.in_(targets))):
+        target_fids = targets if targets is not None else [fr.frame_id for fr in out.frames]
+        for d in s.exec(select(DialogueLine).where(DialogueLine.source_frame_id.in_(target_fids))):
             s.delete(d)
         for fr in out.frames:
+            if fr.frame_id not in frames:
+                continue
             f = frames[fr.frame_id]
             f.reading = fr.model_dump(mode="json", exclude={"texts"})
             if f.frame_type_source != "user":
@@ -264,16 +310,37 @@ def apply_read_unit(
                 )
             )
             known.add(nc.key)
+
+        existing_runs = s.exec(
+            select(AnalysisRun).where(
+                AnalysisRun.chapter_id == cid,
+                AnalysisRun.stage == "read",
+            )
+        ).all()
+        matched = next(
+            (r for r in existing_runs if (r.payload or {}).get("targets") == target_fids),
+            None,
+        )
+        target_unit_index = (
+            matched.unit_index
+            if matched
+            else (max((r.unit_index for r in existing_runs), default=-1) + 1)
+        )
+
         _upsert_run(
             s,
             cid,
             "read",
-            unit_index,
+            target_unit_index,
             mode=mode,
             status="succeeded",
             attempts=attempts,
             ih=ih,
-            payload={"targets": targets, "summary": out.running_summary},
+            payload={
+                "targets": target_fids,
+                "summary": out.running_summary,
+                "output": out.model_dump(mode="json"),
+            },
         )
         s.commit()
 
@@ -326,7 +393,12 @@ def finalize_read(cid: str) -> None:
                 d.speaker_label = d.speaker_label or d.speaker_key
                 d.speaker_key = None
                 s.add(d)
-        ch.status = "dialogue_draft"
+
+        unread = len(read_units(cid)) > 0
+        if unread:
+            ch.status = "frames_approved"
+        else:
+            ch.status = "dialogue_draft"
         ch.updated_at = _now()
         s.add(ch)
         s.commit()
@@ -350,12 +422,24 @@ def recompute_anchors(s: Session, cid: str) -> None:
 # DIALOGUE (polish)
 # ===========================================================================
 def _polish_targets(s: Session, cid: str) -> list[DialogueLine]:
+    processed_line_ids: set[str] = set()
+    for r in s.exec(
+        select(AnalysisRun).where(
+            AnalysisRun.chapter_id == cid,
+            AnalysisRun.stage == "dialogue",
+            AnalysisRun.status == "succeeded",
+        )
+    ):
+        processed_line_ids.update((r.payload or {}).get("targets", []))
+
     return [
         d
         for d in s.exec(
             select(DialogueLine).where(DialogueLine.chapter_id == cid).order_by(DialogueLine.order)
         )
-        if d.kind in POLISHABLE_KINDS and d.edited_by != "user"
+        if d.kind in POLISHABLE_KINDS
+        and d.edited_by != "user"
+        and (d.edited_by == "none" and d.id not in processed_line_ids)
     ]
 
 
@@ -371,8 +455,11 @@ def _speaker_name(d: DialogueLine, names: dict[str, str]) -> str:
     return d.speaker_label or ("(dẫn truyện)" if d.kind == "narration" else "(không rõ)")
 
 
-def build_dialogue_request(cid: str, unit_index: int) -> tuple[ProviderRequest, list[str]]:
-    targets = dialogue_units(cid)[unit_index]
+def build_dialogue_request(
+    cid: str, unit_index: int, targets: list[str] | None = None
+) -> tuple[ProviderRequest, list[str]]:
+    if targets is None:
+        targets = dialogue_units(cid)[unit_index]
     with _session() as s:
         ch = _chapter(s, cid)
         chars = _characters(s, ch.project_id)
@@ -474,7 +561,14 @@ def needs_review_for(raw: str, new: str, note: str | None) -> bool:
 
 
 def apply_dialogue_unit(
-    cid: str, unit_index: int, out: DialogueOut, *, mode: str, attempts: int, ih: str | None
+    cid: str,
+    unit_index: int,
+    out: DialogueOut,
+    *,
+    mode: str,
+    attempts: int,
+    ih: str | None,
+    targets: list[str] | None = None,
 ) -> None:
     with _session() as s:
         ch = _chapter(s, cid)
@@ -493,9 +587,60 @@ def apply_dialogue_unit(
             s.add(d)
         merge_glossary_candidates(s, ch.project_id, cid, out.glossary_candidates)
         merge_address_candidates(s, ch.project_id, out.address_candidates)
-        _upsert_run(
-            s, cid, "dialogue", unit_index, mode=mode, status="succeeded", attempts=attempts, ih=ih
+
+        target_ids = targets if targets is not None else list(edits)
+        existing_runs = s.exec(
+            select(AnalysisRun).where(
+                AnalysisRun.chapter_id == cid,
+                AnalysisRun.stage == "dialogue",
+            )
+        ).all()
+        matched = next(
+            (r for r in existing_runs if (r.payload or {}).get("targets") == target_ids),
+            None,
         )
+        target_unit_index = (
+            matched.unit_index
+            if matched
+            else (max((r.unit_index for r in existing_runs), default=-1) + 1)
+        )
+
+        _upsert_run(
+            s,
+            cid,
+            "dialogue",
+            target_unit_index,
+            mode=mode,
+            status="succeeded",
+            attempts=attempts,
+            ih=ih,
+            payload={
+                "targets": target_ids,
+                "output": out.model_dump(mode="json"),
+            },
+        )
+        s.commit()
+
+
+def reset_dialogue_runs(cid: str) -> None:
+    """Clear dialogue runs and reset AI edited lines to none (keep user edits)."""
+    with _session() as s:
+        ch = _chapter(s, cid)
+        cache = work_dir(ch) / "cache"
+        if cache.exists():
+            shutil.rmtree(cache, ignore_errors=True)
+        for r in s.exec(
+            select(AnalysisRun).where(
+                AnalysisRun.chapter_id == cid, AnalysisRun.stage == "dialogue"
+            )
+        ):
+            s.delete(r)
+        for d in s.exec(select(DialogueLine).where(DialogueLine.chapter_id == cid)):
+            if d.edited_by == "ai":
+                d.edited_by = "none"
+                d.text = d.text_raw
+                d.edit_note = None
+                s.add(d)
         s.commit()
 
 
@@ -526,31 +671,52 @@ STAGES = {
 }
 
 
-def prepare_manual(cid: str, stage: str) -> list[dict[str, Any]]:
+def prepare_manual(cid: str, stage: str, force_all: bool = False) -> list[dict[str, Any]]:
     units_fn = STAGES[stage][0]
-    if stage == "read":
+    if stage == "read" and force_all:
         reset_dialogue(cid)
+    elif stage == "dialogue" and force_all:
+        reset_dialogue_runs(cid)
     units = units_fn(cid)
     if not units:
         raise AppError("NOTHING_TO_ANALYZE", "Không có gì để phân tích ở bước này", status_code=409)
     with _session() as s:
-        for r in s.exec(
-            select(AnalysisRun).where(AnalysisRun.chapter_id == cid, AnalysisRun.stage == stage)
-        ):
-            s.delete(r)
-        s.flush()
+        if force_all:
+            for r in s.exec(
+                select(AnalysisRun).where(AnalysisRun.chapter_id == cid, AnalysisRun.stage == stage)
+            ):
+                s.delete(r)
+            s.flush()
+        existing_runs = list(
+            s.exec(
+                select(AnalysisRun).where(AnalysisRun.chapter_id == cid, AnalysisRun.stage == stage)
+            ).all()
+        )
         for i, targets in enumerate(units):
-            _upsert_run(
+            matching = next(
+                (r for r in existing_runs if (r.payload or {}).get("targets") == targets),
+                None,
+            )
+            if matching and matching.status == "succeeded":
+                continue
+            unit_idx = (
+                matching.unit_index
+                if matching
+                else (max((r.unit_index for r in existing_runs), default=-1) + 1)
+            )
+            run = _upsert_run(
                 s,
                 cid,
                 stage,
-                i,
+                unit_idx,
                 mode="manual",
                 status="awaiting_paste",
                 attempts=0,
                 ih=None,
                 payload={"targets": targets},
             )
+            if not matching:
+                existing_runs.append(run)
         s.commit()
     return list_units(cid, stage)
 
@@ -594,7 +760,8 @@ def manual_bundle(run_id: str) -> Path:
             raise AppError("RUN_NOT_FOUND", "Không tìm thấy phần việc", status_code=404)
         cid, stage, unit = run.chapter_id, run.stage, run.unit_index
         ch = _chapter(s, cid)
-    req, _targets = STAGES[stage][1](cid, unit)
+        targets = (run.payload or {}).get("targets")
+    req, _targets = STAGES[stage][1](cid, unit, targets=targets)
     out = work_dir(ch) / "manual" / f"{stage}_{unit + 1:02d}.zip"
     out.parent.mkdir(parents=True, exist_ok=True)
     prompt = (
@@ -626,8 +793,9 @@ def manual_paste(run_id: str, raw: str) -> dict[str, Any]:
             raise AppError("RUN_NOT_FOUND", "Không tìm thấy phần việc", status_code=404)
         cid, stage, unit = run.chapter_id, run.stage, run.unit_index
         ch = _chapter(s, cid)
+        targets = (run.payload or {}).get("targets")
     _units, build, validator, schema, apply_fn, finalize = STAGES[stage]
-    _req, targets = build(cid, unit)
+    _req, targets = build(cid, unit, targets=targets)
     raw_dir = work_dir(ch) / "raw"
     raw_dir.mkdir(exist_ok=True)
     (raw_dir / f"{stage}_manual_{unit + 1:02d}.txt").write_text(raw, encoding="utf-8")
@@ -640,7 +808,7 @@ def manual_paste(run_id: str, raw: str) -> dict[str, Any]:
         raise AppError(
             "INVALID_OUTPUT", "Kết quả dán vào chưa đúng định dạng", {"error": str(e)[:2000]}, 422
         )
-    apply_fn(cid, unit, out, mode="manual", attempts=1, ih=None)
+    apply_fn(cid, unit, out, mode="manual", attempts=1, ih=None, targets=targets)
     units = list_units(cid, stage)
     if all(u["status"] == "succeeded" for u in units):
         finalize(cid)

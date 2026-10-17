@@ -38,6 +38,8 @@ class SettingsUpdate(BaseModel):
     openai_base_url: Optional[str] = None
     openai_auth_header: Optional[str] = None
     openai_reasoning_effort: Optional[str] = None
+    analysis_rpm: Optional[int] = None
+    read_batch_size: Optional[int] = None
     # kept for backward compatibility; prefer PUT /settings/gemini-key
     gemini_api_key: Optional[str] = None
 
@@ -70,6 +72,8 @@ def get_settings() -> dict[str, Any]:
         "openai_base_url": settings.openai_base_url,
         "openai_auth_header": settings.openai_auth_header,
         "openai_reasoning_effort": settings.openai_reasoning_effort,
+        "analysis_rpm": settings.analysis_rpm,
+        "read_batch_size": settings.read_batch_size,
         "gemini_configured": bool(settings.gemini_api_key),
         "gemini_key_hint": _key_hint(settings.gemini_api_key),
         "openai_configured": bool(settings.openai_compat_api_key),
@@ -99,6 +103,10 @@ def update_settings(update: SettingsUpdate) -> dict[str, Any]:
         settings.openai_auth_header = update.openai_auth_header
     if update.openai_reasoning_effort in ("low", "medium", "high"):
         settings.openai_reasoning_effort = update.openai_reasoning_effort
+    if update.analysis_rpm is not None:
+        settings.analysis_rpm = max(1, min(60, update.analysis_rpm))
+    if update.read_batch_size is not None:
+        settings.read_batch_size = max(4, min(12, update.read_batch_size))
     settings.save_overrides()  # survive restarts
     if update.gemini_api_key is not None:
         settings.save_gemini_key(update.gemini_api_key.strip() or None)

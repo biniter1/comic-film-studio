@@ -23,8 +23,10 @@ class Settings(BaseSettings):
     muse_clip_seconds: float = 4.0
     gemini_api_key: Optional[str] = None
     # Phase 2a: model ids live here only (never hard-coded elsewhere)
-    analysis_model_vision: str = "gemini-2.5-flash"
-    analysis_model_text: str = "gemini-2.5-pro"
+    analysis_model_vision: str = "gemini-flash-latest"
+    analysis_model_text: str = "gemini-pro-latest"
+    analysis_rpm: int = 4
+    read_batch_size: int = 6
     # OpenAI Compat provider settings
     analysis_provider: str = "gemini"  # "gemini" | "openai_compat"
     openai_base_url: str = "https://revidapi.com/v1"
@@ -70,6 +72,8 @@ class Settings(BaseSettings):
         "openai_base_url",
         "openai_auth_header",
         "openai_reasoning_effort",
+        "analysis_rpm",
+        "read_batch_size",
     )
 
     def load_overrides(self) -> None:

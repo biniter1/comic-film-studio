@@ -32,4 +32,24 @@ test("settings: switch to OpenAI provider, save key, test hint, and delete", asy
   await expect(page.getByText("Dán API Key cổng tương thích OpenAI:")).toBeVisible();
 });
 
+test("settings: analysis models and parameters can be edited and saved", async ({ page }) => {
+  await page.goto("/settings");
+  const visionInput = page.getByTestId("vision-model-input");
+  await expect(visionInput).toBeVisible();
+  await visionInput.fill("gemini-3.8-flash");
+
+  const textInput = page.getByTestId("text-model-input");
+  await expect(textInput).toBeVisible();
+  await textInput.fill("gemini-pro-latest");
+
+  const rpmInput = page.getByTestId("analysis-rpm-input");
+  await rpmInput.fill("6");
+
+  const batchInput = page.getByTestId("read-batch-size-input");
+  await batchInput.fill("8");
+
+  await page.getByRole("button", { name: "Lưu tham số" }).click();
+  await expect(page.getByText("Đã lưu cài đặt thành công!")).toBeVisible();
+});
+
 

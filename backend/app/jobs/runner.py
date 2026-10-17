@@ -173,6 +173,17 @@ class JobService:
                 session.commit()
                 session.refresh(job)
                 self._emit_event(job)
+                queued = session.exec(select(Job).where(Job.status == "queued")).all()
+                for child in queued:
+                    if job_id in (child.depends_on or []) and child.type == "analysis_dialogue":
+                        child.status = "cancelled"
+                        child.error_category = "permanent"
+                        child.error_message = f"Bị hủy do job đọc trước đó ({job_id}) bị hủy"
+                        child.finished_at = datetime.now(timezone.utc)
+                        session.add(child)
+                        session.commit()
+                        session.refresh(child)
+                        self._emit_event(child)
             elif job.status == "running":
                 # Signal the runner worker to stop; worker will handle status transition
                 if runner:
@@ -242,6 +253,19 @@ class JobRunner:
     def is_cancelled(self, job_id: str) -> bool:
         return self._cancel_flags.get(job_id, False)
 
+    def _cancel_dialogue_children(self, parent_job_id: str, session: Session) -> None:
+        queued = session.exec(select(Job).where(Job.status == "queued")).all()
+        for child in queued:
+            if parent_job_id in (child.depends_on or []) and child.type == "analysis_dialogue":
+                child.status = "cancelled"
+                child.error_category = "permanent"
+                child.error_message = f"Bị hủy do job đọc trước đó ({parent_job_id}) thất bại"
+                child.finished_at = datetime.now(timezone.utc)
+                session.add(child)
+                session.commit()
+                session.refresh(child)
+                self._emit_event(child)
+
     async def _run_loop(self) -> None:
         while self._running:
             try:
@@ -266,6 +290,17 @@ class JobRunner:
                         blocked_by.append(dep_id)
 
                 if blocked_by:
+                    # Item 5: dialogue bị cancel khi read failed
+                    if child.type == "analysis_dialogue":
+                        blocked_str = ", ".join(blocked_by)
+                        child.error_message = f"Bị hủy do job đọc trước đó ({blocked_str}) thất bại"
+                        child.finished_at = datetime.now(timezone.utc)
+                        session.add(child)
+                        session.commit()
+                        session.refresh(child)
+                        self._emit_event(child)
+                        continue
+
                     msg = f"Chờ job {', '.join(blocked_by)} được sửa hoặc chạy lại"
                     if child.user_action_required != msg:
                         child.user_action_required = msg
@@ -423,6 +458,7 @@ class JobRunner:
                         session.commit()
                         session.refresh(j)
                         self._emit_event(j)
+                        self._cancel_dialogue_children(job_id, session)
                     elif je.category == "transient":
                         j.attempts += 1
                         if j.attempts < j.max_attempts:
@@ -443,6 +479,7 @@ class JobRunner:
                             session.commit()
                             session.refresh(j)
                             self._emit_event(j)
+                            self._cancel_dialogue_children(job_id, session)
                     else:
                         j.status = "failed"
                         j.finished_at = datetime.now(timezone.utc)
@@ -450,6 +487,7 @@ class JobRunner:
                         session.commit()
                         session.refresh(j)
                         self._emit_event(j)
+                        self._cancel_dialogue_children(job_id, session)
 
         except Exception as e:
             ctx.log(f"Lỗi không mong muốn: {str(e)}")
@@ -464,6 +502,7 @@ class JobRunner:
                     session.commit()
                     session.refresh(j)
                     self._emit_event(j)
+                    self._cancel_dialogue_children(job_id, session)
 
         finally:
             current_job_ctx.reset(token)

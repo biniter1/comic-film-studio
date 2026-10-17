@@ -59,6 +59,8 @@ export interface SettingsData {
   openai_configured: boolean;
   openai_key_hint: string | null;
   openai_reasoning_effort: "low" | "medium" | "high";
+  analysis_rpm?: number;
+  read_batch_size?: number;
   ffmpeg_available: boolean;
   ffmpeg_version: string | null;
 }
@@ -159,6 +161,9 @@ export const api = {
     analysis_provider?: "gemini" | "openai_compat";
     openai_base_url?: string;
     openai_auth_header?: "x-api-key" | "authorization-bearer";
+    openai_reasoning_effort?: "low" | "medium" | "high";
+    analysis_rpm?: number;
+    read_batch_size?: number;
     gemini_api_key?: string;
   }) =>
     request<SettingsData>("/settings", {

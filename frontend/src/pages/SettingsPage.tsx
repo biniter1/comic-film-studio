@@ -9,6 +9,10 @@ export function SettingsPage() {
   const [concurrency, setConcurrency] = useState<number>(2);
   const [maxTabs, setMaxTabs] = useState<number>(4);
   const [clipSeconds, setClipSeconds] = useState<number>(4.0);
+  const [visionModel, setVisionModel] = useState("gemini-flash-latest");
+  const [textModel, setTextModel] = useState("gemini-pro-latest");
+  const [analysisRpm, setAnalysisRpm] = useState<number>(4);
+  const [readBatchSize, setReadBatchSize] = useState<number>(6);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
   const [provider, setProvider] = useState<"gemini" | "openai_compat">("gemini");
@@ -33,6 +37,10 @@ export function SettingsPage() {
       setConcurrency(settings.job_concurrency);
       setMaxTabs(settings.max_parallel_muse_tabs);
       setClipSeconds(settings.muse_clip_seconds);
+      setVisionModel(settings.analysis_model_vision || "gemini-flash-latest");
+      setTextModel(settings.analysis_model_text || "gemini-pro-latest");
+      setAnalysisRpm(settings.analysis_rpm ?? 4);
+      setReadBatchSize(settings.read_batch_size ?? 6);
       setProvider(settings.analysis_provider || "gemini");
       setOpenaiBaseUrl(settings.openai_base_url || "https://revidapi.com/v1");
       setOpenaiAuthHeader(settings.openai_auth_header || "x-api-key");
@@ -116,6 +124,10 @@ export function SettingsPage() {
         job_concurrency: concurrency,
         max_parallel_muse_tabs: maxTabs,
         muse_clip_seconds: clipSeconds,
+        analysis_model_vision: visionModel,
+        analysis_model_text: textModel,
+        analysis_rpm: analysisRpm,
+        read_batch_size: readBatchSize,
       }),
     onSuccess: () => {
       setSaveSuccess(true);
@@ -453,6 +465,79 @@ export function SettingsPage() {
             </form>
           </div>
         )}
+
+        {/* Model Selection & Parameters */}
+        <div className="space-y-4 pt-4 border-t border-border">
+          <h3 className="text-sm font-semibold text-gray-200">Mô hình & Thông số phân tích</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="space-y-1">
+              <label className="text-xs text-gray-400">Model thị giác (đọc khung truyện)</label>
+              <input
+                type="text"
+                list="vision-models"
+                value={visionModel}
+                onChange={(e) => setVisionModel(e.target.value)}
+                placeholder="gemini-flash-latest"
+                data-testid="vision-model-input"
+                className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-primary"
+              />
+              <datalist id="vision-models">
+                <option value="gemini-flash-latest" />
+                <option value="gemini-2.5-flash" />
+                <option value="gemini-3.8-flash" />
+              </datalist>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs text-gray-400">Model văn bản (biên tập thoại)</label>
+              <input
+                type="text"
+                list="text-models"
+                value={textModel}
+                onChange={(e) => setTextModel(e.target.value)}
+                placeholder="gemini-pro-latest"
+                data-testid="text-model-input"
+                className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-primary"
+              />
+              <datalist id="text-models">
+                <option value="gemini-pro-latest" />
+                <option value="gemini-2.5-pro" />
+                <option value="gemini-flash-latest" />
+                <option value="gemini-3.8-flash" />
+              </datalist>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="space-y-1">
+              <label className="text-xs text-gray-400">Giới hạn tốc độ phân tích (lượt gọi / phút - RPM)</label>
+              <input
+                type="number"
+                min={1}
+                max={60}
+                value={analysisRpm}
+                onChange={(e) => setAnalysisRpm(Number(e.target.value))}
+                data-testid="analysis-rpm-input"
+                className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-primary"
+              />
+              <p className="text-[11px] text-gray-500">Mặc định 4 RPM. Rate limiter dùng chung tránh lỗi 429.</p>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs text-gray-400">Kích thước lô đọc khung (4–12 khung / gói)</label>
+              <input
+                type="number"
+                min={4}
+                max={12}
+                value={readBatchSize}
+                onChange={(e) => setReadBatchSize(Number(e.target.value))}
+                data-testid="read-batch-size-input"
+                className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-primary"
+              />
+              <p className="text-[11px] text-gray-500">Mặc định 6 khung mỗi lần gửi AI.</p>
+            </div>
+          </div>
+        </div>
       </div>
 
 
