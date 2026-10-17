@@ -6,6 +6,7 @@ by the API provider (job) or pasted by the user (manual mode) — both go throug
 """
 
 import json
+import re
 import shutil
 import zipfile
 from datetime import datetime, timezone
@@ -32,7 +33,15 @@ from app.models.project import Asset, Chapter, Frame
 from app.providers.base import ImagePart, ProviderRequest
 from app.storage import asset_abs_path, chapter_dir
 
+PROMPT_VERSION_READ = "v2"
+PROMPT_VERSION_DIALOGUE = "v3"
 PROMPT_VERSION = "v2"
+
+
+def prompt_version_for(stage: str) -> str:
+    return PROMPT_VERSION_READ if stage == "read" else PROMPT_VERSION_DIALOGUE
+
+
 READ_BATCH = 6
 DIALOGUE_CHUNK = 150
 DIALOGUE_CONTEXT = 10
@@ -220,7 +229,7 @@ def build_read_request(
     req = ProviderRequest(
         stage="read",
         model=settings.analysis_model_vision,
-        system=load_prompt("read", PROMPT_VERSION),
+        system=load_prompt("read", PROMPT_VERSION_READ),
         user_text=user,
         images=images,
     )
@@ -360,7 +369,7 @@ def _upsert_run(s: Session, cid: str, stage: str, unit_index: int, **kw: Any) ->
     run.error = kw.get("error")
     run.provider = kw.get("provider", run.provider)
     run.model = kw.get("model", run.model)
-    run.prompt_version = PROMPT_VERSION
+    run.prompt_version = prompt_version_for(stage)
     if "payload" in kw:
         run.payload = {**(run.payload or {}), **kw["payload"]}
     if run.status in ("succeeded", "failed"):
@@ -525,7 +534,7 @@ def build_dialogue_request(
     req = ProviderRequest(
         stage="dialogue",
         model=settings.analysis_model_text,
-        system=load_prompt("dialogue", PROMPT_VERSION),
+        system=load_prompt("dialogue", PROMPT_VERSION_DIALOGUE),
         user_text=json.dumps(payload, ensure_ascii=False, indent=1),
     )
     return req, targets
@@ -552,12 +561,26 @@ def dialogue_validator(targets: list[str]):
     return check
 
 
-def needs_review_for(raw: str, new: str, note: str | None) -> bool:
-    if note:
+def normalize_for_review(text: str) -> str:
+    """Normalize text for review comparison: lowercase, remove punctuation, collapse whitespace."""
+    t = (text or "").lower()
+    t = re.sub(r"[^\w\s]", " ", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def needs_review_for(
+    raw: str,
+    new: str,
+    note: str | None = None,
+    uncertain: bool = False,
+) -> bool:
+    if uncertain:
         return True
-    if len(raw) < 8:
+    norm_raw = normalize_for_review(raw)
+    norm_new = normalize_for_review(new)
+    if len(norm_raw) < 8:
         return False
-    return abs(len(new) - len(raw)) / len(raw) > LENGTH_TOLERANCE
+    return abs(len(norm_new) - len(norm_raw)) / len(norm_raw) > LENGTH_TOLERANCE
 
 
 def apply_dialogue_unit(
@@ -582,7 +605,9 @@ def apply_dialogue_unit(
             d.text = new
             d.edited_by = "ai" if new != d.text_raw else "none"
             d.edit_note = e.edit_note
-            d.needs_review = d.needs_review or needs_review_for(d.text_raw, new, e.edit_note)
+            d.needs_review = d.needs_review or needs_review_for(
+                d.text_raw, new, e.edit_note, uncertain=bool(getattr(e, "uncertain", False))
+            )
             d.reviewed = False
             s.add(d)
         merge_glossary_candidates(s, ch.project_id, cid, out.glossary_candidates)

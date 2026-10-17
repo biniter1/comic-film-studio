@@ -48,6 +48,14 @@ test("phase 2a: analyze → line anchored to previous scene → edit, speaker, r
   await expect(rows).toHaveCount(3, { timeout: 30_000 });
   await expect(page.getByText("Thoại: bản nháp")).toBeVisible();
 
+  // filter by AI changed meaning (edit_note)
+  const hasNoteFilter = page.getByTestId("filter-has-note");
+  await expect(hasNoteFilter).toBeVisible();
+  await hasNoteFilter.check();
+  await expect(rows).toHaveCount(0);
+  await hasNoteFilter.uncheck();
+  await expect(rows).toHaveCount(3);
+
   // frame 2 is dialogue-only → its line is attached to frame #1
   const types = page.getByTestId("frame-type");
   await expect(types.nth(1)).toHaveValue("dialogue_only");

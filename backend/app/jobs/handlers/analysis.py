@@ -128,7 +128,7 @@ def _run_stage(ctx: JobContext, stage: str) -> None:
                 provider,
                 req,
                 schema,
-                prompt_version=stages.PROMPT_VERSION,
+                prompt_version=stages.prompt_version_for(stage),
                 work_dir=wd,
                 extra_validate=validator(built_targets),
             )

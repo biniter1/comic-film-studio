@@ -193,6 +193,7 @@ class DialogueEdit(BaseModel):
     line_id: str
     text: str = Field(min_length=1)
     edit_note: Optional[str] = None
+    uncertain: bool = False
 
 
 class GlossaryCandidate(BaseModel):

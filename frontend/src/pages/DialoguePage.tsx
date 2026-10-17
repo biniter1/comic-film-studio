@@ -37,7 +37,7 @@ import { Button, Empty, ErrorBox, JobProgress, PageHeader, StatusBadge } from ".
 const LOW_CONF = 0.7;
 const TERMINAL = ["succeeded", "failed", "cancelled"];
 
-type Filter = { review: boolean; speaker: string; frame: string };
+type Filter = { review: boolean; hasNote: boolean; speaker: string; frame: string };
 
 export function DialoguePage() {
   const { cid = "" } = useParams();
@@ -92,10 +92,11 @@ export function DialoguePage() {
   const reviewAll = useMutation({ mutationFn: () => dialogueApi.reviewAll(cid), onSuccess: refresh });
   const applyGlossary = useMutation({ mutationFn: () => dialogueApi.applyGlossary(cid), onSuccess: refresh });
 
-  const [filter, setFilter] = useState<Filter>({ review: false, speaker: "", frame: "" });
+  const [filter, setFilter] = useState<Filter>({ review: false, hasNote: false, speaker: "", frame: "" });
   const lines = useMemo(() => {
     let ls = d?.lines ?? [];
     if (filter.review) ls = ls.filter((l) => needsAttention(l));
+    if (filter.hasNote) ls = ls.filter((l) => Boolean(l.edit_note && l.edit_note.trim()));
     if (filter.speaker) ls = ls.filter((l) => (l.speaker_key ?? `label:${l.speaker_label ?? ""}`) === filter.speaker);
     if (filter.frame) ls = ls.filter((l) => l.source_frame_id === filter.frame || l.anchor_frame_id === filter.frame);
     return ls;
@@ -316,6 +317,15 @@ export function DialoguePage() {
                   data-testid="filter-review"
                 />
                 Chỉ câu cần soát
+              </label>
+              <label className="flex items-center gap-1.5 text-gray-300">
+                <input
+                  type="checkbox"
+                  checked={filter.hasNote}
+                  onChange={(e) => setFilter((x) => ({ ...x, hasNote: e.target.checked }))}
+                  data-testid="filter-has-note"
+                />
+                Chỉ câu AI đổi nghĩa
               </label>
               <select
                 className="bg-surface border border-border rounded px-2 py-1 text-sm"
@@ -600,7 +610,11 @@ function LineRow({
             </Button>
           )}
         </div>
-        {line.edit_note && <div className="text-[11px] text-amber-300/80">AI ghi chú: {line.edit_note}</div>}
+        {line.edit_note && Boolean(line.edit_note.trim()) && (
+          <div className="text-[11px] text-amber-300/80" data-testid="line-edit-note">
+            AI ghi chú: {line.edit_note}
+          </div>
+        )}
         <ErrorBox error={patch.error || revert.error} />
       </div>
     </div>
