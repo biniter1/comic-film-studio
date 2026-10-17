@@ -237,7 +237,7 @@ export function ProjectDetailPage() {
                 </Link>
                 <Link to={`/chapters/${ch.id}/dialogue`} onClick={() => rememberChapter(ch.id)}>
                   <Button
-                    disabled={!["frames_approved", "analyzing", "dialogue_draft", "dialogue_approved"].includes(ch.status)}
+                    disabled={!["frames_approved", "analyzing", "dialogue_draft", "dialogue_approved", "shots_draft", "plan_approved"].includes(ch.status)}
                     title="Kịch bản thoại (cần duyệt khung trước)"
                   >
                     <MessageSquareText className="w-4 h-4" /> Thoại

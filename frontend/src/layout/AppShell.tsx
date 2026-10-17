@@ -38,6 +38,7 @@ const IDLE =
 /** Chapter screens live under /chapters/:cid/{import,frames,dialogue}; keep their nav item highlighted. */
 function navActive(to: string, isActive: boolean, path: string): boolean {
   if (to === "/projects") return isActive && !/^\/projects\/[^/]+\/glossary/.test(path);
+  if (to === "/shot-board") return isActive || /^\/chapters\/[^/]+\/shots/.test(path);
   if (to === "/import") return isActive || /^\/chapters\/[^/]+\/import/.test(path);
   if (to === "/frames") return isActive || /^\/chapters\/[^/]+\/frames/.test(path);
   if (to === "/script")

@@ -25,6 +25,59 @@ def e2e_responder(req: ProviderRequest) -> str:
     """
     import json
 
+    if req.stage == "plan":
+        data = json.loads(req.user_text)
+        ids = [f["frame_id"] for f in data["SCENE_FRAMES"]]
+        return json.dumps(
+            {
+                "scenes": [
+                    {
+                        "frame_ids": ids,
+                        "summary": "e2e scene",
+                        "location_key": "dai_dien",
+                        "mood": "tense",
+                    }
+                ],
+                "new_locations": [
+                    {
+                        "key": "dai_dien",
+                        "name_vi": "Đại điện",
+                        "location_lock": "stone hall with red pillars",
+                    }
+                ],
+            }
+        )
+    if req.stage == "shots":
+        data = json.loads(req.user_text)
+        return json.dumps(
+            {
+                "shots": [
+                    {
+                        "frame_ids": [f["frame_id"]],
+                        "transition_in": "cut",
+                        "duration_s": 4,
+                        "camera": {"shot_size": "medium", "movement": "push_in", "speed": "slow"},
+                        "blocking": [
+                            {
+                                "character_key": "lam_phong",
+                                "screen_pos": "left",
+                                "depth": "mg",
+                                "facing": "right",
+                                "pose": "standing",
+                            }
+                        ],
+                        "beats": [
+                            {"t0": 0, "t1": 2, "action": "wind moves his robe"},
+                            {"t0": 2, "t1": 4, "action": "he raises his eyes"},
+                        ],
+                        "start_state": "standing still",
+                        "end_state": "looking up",
+                        "line_ids": [],
+                    }
+                    for f in data["FRAMES"]
+                ]
+            }
+        )
     if req.stage == "character_profile":
         return json.dumps(
             {

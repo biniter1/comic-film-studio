@@ -155,7 +155,7 @@ export function FramesPage() {
 
   const ch = chapter.data;
   const status = data.data?.status ?? ch?.status;
-  const approved = ["frames_approved", "analyzing", "dialogue_draft", "dialogue_approved"].includes(status ?? "");
+  const approved = ["frames_approved", "analyzing", "dialogue_draft", "dialogue_approved", "shots_draft", "plan_approved"].includes(status ?? "");
   const hasScript = status === "dialogue_draft" || status === "dialogue_approved";
   const doSave = () => {
     const keys = new Set(serverRanges.map((r) => `${r.y0}:${r.y1}`));

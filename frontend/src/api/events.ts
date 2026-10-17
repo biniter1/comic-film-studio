@@ -49,6 +49,7 @@ export function useEvents(chapterId?: string) {
         queryClient.invalidateQueries({ queryKey: ["pages", ch.id] });
         queryClient.invalidateQueries({ queryKey: ["frames", ch.id] });
         queryClient.invalidateQueries({ queryKey: ["dialogue", ch.id] });
+        queryClient.invalidateQueries({ queryKey: ["shots", ch.id] });
         queryClient.invalidateQueries({ queryKey: ["chapters", ch.project_id] });
       } catch (err) {
         console.error("Failed to parse chapter.updated event:", err);

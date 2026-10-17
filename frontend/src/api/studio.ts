@@ -16,7 +16,9 @@ export type ChapterStatus =
   | "frames_approved"
   | "analyzing"
   | "dialogue_draft"
-  | "dialogue_approved";
+  | "dialogue_approved"
+  | "shots_draft"
+  | "plan_approved";
 
 export interface Chapter {
   id: string;
@@ -158,6 +160,8 @@ export const STATUS_LABEL: Record<ChapterStatus, string> = {
   analyzing: "Đang phân tích",
   dialogue_draft: "Thoại: bản nháp",
   dialogue_approved: "Thoại: đã duyệt",
+  shots_draft: "Shot: bản nháp",
+  plan_approved: "Kế hoạch shot: đã duyệt",
 };
 
 export function formatBytes(n?: number): string {

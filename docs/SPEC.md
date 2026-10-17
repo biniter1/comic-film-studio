@@ -624,6 +624,10 @@ Vì composition là HTML thuần, **AI agent (Claude, Gemini, Antigravity) đọ
 | POST | `/tasks/{tid}/use-raw` | (boundary_fix) dùng khung gốc |
 | POST | `/assets/{aid}/approve` · `/reject` | Duyệt/từ chối keyframe, khung nối, take |
 | GET | `/assets/{aid}/file` | Phục vụ file (kiểm tra path nằm trong data dir) |
+| GET | `/chapters/{cid}/shots` | Scene + shot (storyboard, prompt đã ghép, ảnh đính kèm, câu thoại, cảnh báo luật) |
+| PATCH | `/shots/{sid}` | Sửa transition/duration/camera/blocking/beats/start_state/end_state/`prompt_override` → chạy lại luật + ghép prompt cả chapter |
+| POST | `/chapters/{cid}/shots/approve-plan` | Duyệt kế hoạch shot (`plan_approved`) |
+| POST | `/chapters/{cid}/analysis/plan` · `/analysis/shots` | Như các lượt khác (api/manual, bỏ qua phần đã làm); `plan` mặc định nối job `shots`; `force_all` = lập lại toàn bộ |
 | POST | `/dialogue/{lid}/tts` | TTS (Phase 4) |
 | POST | `/chapters/{cid}/export` | Job `export_capcut` |
 | GET | `/jobs?status=` · POST `/jobs/{jid}/retry` · `/cancel` | Job |
@@ -696,7 +700,7 @@ Mã HTTP: 400 dữ liệu sai, 404 không tồn tại, 409 xung đột trạng t
 | **1** | Project/chapter, nhập URL + thư mục, ghép & cắt khung, UI chỉnh khung | xem `docs/tasks/phase-1.md` |
 | **2a** | Provider adapter (Gemini + thủ công + giả), lượt `read` (loại khung, bóc thoại, người nói), lượt `dialogue` (biên tập + thuật ngữ + xưng hô), màn **Kịch bản thoại** & **Thuật ngữ** | xem `docs/tasks/phase-2a.md` |
 | **2b** | **Nhân vật & bối cảnh** (lớp khóa 1, §4.6): `look_lock`, trang phục, `Location`, gói tạo **character/location sheet** bằng Nano Banana (thủ công), duyệt sheet | xem `docs/tasks/phase-2b.md` (bắt đầu sau thí nghiệm `docs/experiments/consistency-sheet-test.md`) |
-| **2c** | Lượt `plan` + `shots` với **storyboard** (camera, blocking, beats), **ghép prompt bằng code**, luật §4.3 (1–11), shot phản ứng, màn Bảng shot/Storyboard | viết sau review 2b |
+| **2c** | Lượt `plan` (chia scene, chỉ chữ) + `shots` (1 phần việc/scene, có ảnh) với **storyboard** (camera, blocking, beats, start/end_state), luật §4.3 (1–11) chạy bằng code, **ghép prompt bằng code** (§4.6), màn **Bảng shot** (`/chapters/:cid/shots`): thẻ storyboard, cảnh báo, copy prompt, sửa shot, duyệt kế hoạch | Đã làm (PR phase-2c-shots) |
 | **3** | HandoffTask, Hàng chờ, take, duyệt, khung nối, lập lịch chuỗi, stale | viết sau review Phase 2 |
 | **4** | Nhân vật (ảnh chuẩn, giọng), TTS, xuất gói CapCut, **dựng tự động HyperFrames** (bắt đầu bằng spike Windows) | |
 | **5** | Thư mục theo dõi, AI gom khung, sao lưu, đánh bóng UI | |

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  Clapperboard,
   BookOpen,
   CheckCircle2,
   ClipboardPaste,
@@ -85,8 +86,11 @@ export function DialoguePage() {
 
   const d = data.data;
   const status = d?.status ?? chapter.data?.status;
-  const hasScript = status === "dialogue_draft" || status === "dialogue_approved";
-  const canAnalyze = ["frames_approved", "analyzing", "dialogue_draft", "dialogue_approved"].includes(status ?? "");
+  const hasScript = ["dialogue_draft", "dialogue_approved", "shots_draft", "plan_approved"].includes(
+    status ?? ""
+  );
+  const dialogueApproved = ["dialogue_approved", "shots_draft", "plan_approved"].includes(status ?? "");
+  const canAnalyze = ["frames_approved", "analyzing", "dialogue_draft", "dialogue_approved", "shots_draft", "plan_approved"].includes(status ?? "");
 
   const approve = useMutation({ mutationFn: () => dialogueApi.approve(cid), onSuccess: refresh });
   const reviewAll = useMutation({ mutationFn: () => dialogueApi.reviewAll(cid), onSuccess: refresh });
@@ -250,14 +254,21 @@ export function DialoguePage() {
                 <Button
                   variant="primary"
                   className="!bg-emerald-700 hover:!bg-emerald-600"
-                  disabled={busy || pending > 0 || status === "dialogue_approved" || approve.isPending}
+                  disabled={busy || pending > 0 || dialogueApproved || approve.isPending}
                   title={pending > 0 ? `Còn ${pending} câu cần soát` : undefined}
                   onClick={() => approve.mutate()}
                   data-testid="approve-dialogue"
                 >
                   <CheckCircle2 className="w-4 h-4" />
-                  {status === "dialogue_approved" ? "Đã duyệt" : "Duyệt kịch bản thoại"}
+                  {dialogueApproved ? "Đã duyệt" : "Duyệt kịch bản thoại"}
                 </Button>
+                {dialogueApproved && (
+                  <Link to={`/chapters/${cid}/shots`}>
+                    <Button variant="primary" data-testid="to-shots">
+                      <Clapperboard className="w-4 h-4" /> Bảng shot →
+                    </Button>
+                  </Link>
+                )}
               </>
             )}
           </>
@@ -295,7 +306,7 @@ export function DialoguePage() {
             cid={cid}
             stage={manual}
             setStage={setManual}
-            units={d.units[manual]}
+            units={d.units[manual as "read" | "dialogue"] ?? []}
             hasScript={hasScript}
             onStart={(s) => startManual.mutate({ stage: s, force_all: false })}
             starting={startManual.isPending}

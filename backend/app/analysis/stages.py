@@ -47,6 +47,10 @@ def prompt_version_for(stage: str) -> str:
         return PROMPT_VERSION_DIALOGUE
     if stage == "character_profile":
         return PROMPT_VERSION_LOOK_PROFILE
+    if stage in ("plan", "shots"):
+        from app.analysis import shots as shots_mod
+
+        return shots_mod.PROMPT_VERSION_PLAN if stage == "plan" else shots_mod.PROMPT_VERSION_SHOTS
     return PROMPT_VERSION
 
 
@@ -125,7 +129,14 @@ DIALOGUE_CONTEXT = 10
 LENGTH_TOLERANCE = 0.4
 LOW_CONFIDENCE = 0.7
 POLISHABLE_KINDS = ("dialogue", "inner_thought", "narration", "technique_name", "system")
-ANALYZABLE_STATUSES = ("frames_approved", "analyzing", "dialogue_draft", "dialogue_approved")
+ANALYZABLE_STATUSES = (
+    "frames_approved",
+    "analyzing",
+    "dialogue_draft",
+    "dialogue_approved",
+    "shots_draft",
+    "plan_approved",
+)
 
 
 def _now() -> datetime:
@@ -842,6 +853,25 @@ STAGES = {
         finalize_dialogue,
     ),
 }
+
+from app.analysis import shots as _shots  # noqa: E402  (Phase 2c stages)
+
+STAGES["plan"] = (
+    _shots.plan_units,
+    _shots.build_plan_request,
+    _shots.plan_validator,
+    _shots.PlanOut,
+    _shots.apply_plan_unit,
+    _shots.finalize_plan,
+)
+STAGES["shots"] = (
+    _shots.shots_units,
+    _shots.build_shots_request,
+    _shots.shots_validator,
+    _shots.ShotsOut,
+    _shots.apply_shots_unit,
+    _shots.finalize_shots,
+)
 
 
 def prepare_manual(cid: str, stage: str, force_all: bool = False) -> list[dict[str, Any]]:

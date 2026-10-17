@@ -33,6 +33,8 @@ CHAPTER_JOB_TYPES = (
     "stitch_and_cut",
     "analysis_read",
     "analysis_dialogue",
+    "analysis_plan",
+    "analysis_shots",
 )
 
 
@@ -235,6 +237,14 @@ def delete_chapter(cid: str) -> None:
 
 def drop_analysis(s: Session, cid: str) -> int:
     """Frames changed → dialogue/analysis built on them is stale (and FK-bound). Remove it."""
+    from app.models.shots import Scene, Shot
+
+    for sh in s.exec(select(Shot).where(Shot.chapter_id == cid)).all():
+        s.delete(sh)
+    s.flush()
+    for sc in s.exec(select(Scene).where(Scene.chapter_id == cid)).all():
+        s.delete(sc)
+    s.flush()
     lines = s.exec(select(DialogueLine).where(DialogueLine.chapter_id == cid)).all()
     for d in lines:
         s.delete(d)
@@ -610,6 +620,17 @@ def put_frames(cid: str, ranges: list[tuple[int, int]]) -> dict[str, Any]:
                     r.payload = {**(r.payload or {}), "targets": new_targets}
                     s.add(r)
             s.flush()
+            from app.models.shots import Scene, Shot
+
+            for row in [
+                *s.exec(select(Scene).where(Scene.chapter_id == cid)),
+                *s.exec(select(Shot).where(Shot.chapter_id == cid)),
+            ]:
+                kept = [fid for fid in row.frame_ids if fid not in gone]
+                if len(kept) != len(row.frame_ids):
+                    row.frame_ids = kept
+                    s.add(row)
+            s.flush()
         for f in removed:
             s.delete(f)
         for i, key in enumerate(ranges, 1):
@@ -630,19 +651,36 @@ def put_frames(cid: str, ranges: list[tuple[int, int]]) -> dict[str, Any]:
 
         unread_units = stages.read_units(cid)
         has_unread = len(unread_units) > 0
-        has_script = c.status in ("dialogue_draft", "dialogue_approved")
+        has_script = c.status in (
+            "dialogue_draft",
+            "dialogue_approved",
+            "shots_draft",
+            "plan_approved",
+        )
         if has_script:
             stages.recompute_anchors(s, cid)
 
         if has_unread:
             # Còn khung chưa đọc → không để chapter ở dialogue_draft như thể đã xong
-            analyzable = ("frames_approved", "dialogue_draft", "dialogue_approved")
+            analyzable = (
+                "frames_approved",
+                "dialogue_draft",
+                "dialogue_approved",
+                "shots_draft",
+                "plan_approved",
+            )
             c.status = (
                 "frames_approved" if (has_script or c.status in analyzable) else "frames_draft"
             )
         elif has_script:
             c.status = "dialogue_draft"
-        elif changed or c.status not in ("frames_approved", "dialogue_draft", "dialogue_approved"):
+        elif changed or c.status not in (
+            "frames_approved",
+            "dialogue_draft",
+            "dialogue_approved",
+            "shots_draft",
+            "plan_approved",
+        ):
             c.status = "frames_draft"
         c.updated_at = _now()
         s.add(c)
@@ -661,7 +699,13 @@ def approve_frames(cid: str) -> dict[str, Any]:
         n = len(s.exec(select(Frame).where(Frame.chapter_id == cid)).all())
         if n == 0:
             raise AppError("NO_FRAMES", "Chưa có khung nào để duyệt", status_code=409)
-        if c.status not in ("analyzing", "dialogue_draft", "dialogue_approved"):
+        if c.status not in (
+            "analyzing",
+            "dialogue_draft",
+            "dialogue_approved",
+            "shots_draft",
+            "plan_approved",
+        ):
             c.status = "frames_approved"  # later stages keep their status (frames unchanged)
         c.updated_at = _now()
         s.add(c)

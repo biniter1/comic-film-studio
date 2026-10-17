@@ -9,10 +9,11 @@ import { ImportPage } from "./pages/ImportPage";
 import { FramesPage } from "./pages/FramesPage";
 import { DialoguePage } from "./pages/DialoguePage";
 import { GlossaryPage } from "./pages/GlossaryPage";
+import { ShotBoardPage } from "./pages/ShotBoardPage";
 import { lastChapter } from "./api/studio";
 
 /** Sidebar shortcuts open the last chapter you worked on (or the project list). */
-function LastChapter({ to }: { to: "import" | "frames" | "dialogue" }) {
+function LastChapter({ to }: { to: "import" | "frames" | "dialogue" | "shots" }) {
   const cid = lastChapter();
   return <Navigate to={cid ? `/chapters/${cid}/${to}` : "/projects"} replace />;
 }
@@ -42,16 +43,8 @@ export function App() {
             <Route path="chapters/:cid/dialogue" element={<DialoguePage />} />
             <Route path="projects/:pid/glossary" element={<GlossaryPage />} />
             <Route path="script" element={<LastChapter to="dialogue" />} />
-            <Route
-              path="shot-board"
-              element={
-                <PlaceholderPage
-                  title="Bảng shot"
-                  phase="Phase 2"
-                  description="Toàn cảnh các chuỗi shot (chains), trạng thái và quy tắc chuyển cảnh"
-                />
-              }
-            />
+            <Route path="chapters/:cid/shots" element={<ShotBoardPage />} />
+            <Route path="shot-board" element={<LastChapter to="shots" />} />
             <Route
               path="queue"
               element={
