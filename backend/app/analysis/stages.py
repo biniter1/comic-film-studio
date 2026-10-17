@@ -114,9 +114,10 @@ def get_read_frame_ids(s: Session, cid: str) -> set[str]:
     ).all()
     read_ids: set[str] = set()
     for r in runs:
-        if (r.payload or {}).get("output"):
-            for fid in (r.payload or {}).get("targets", []):
-                read_ids.add(fid)
+        # Runs from before outputs were stored have no payload["output"]; their dialogue lines
+        # are already in the DB, so they still count as read (re-reading them costs credits).
+        for fid in (r.payload or {}).get("targets", []):
+            read_ids.add(fid)
     return read_ids
 
 

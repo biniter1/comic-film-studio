@@ -646,3 +646,32 @@ def test_dialogue_cancelled_when_read_fails(c: TestClient):
     diag_res = wait_job(c, dialogue_job_id)
     assert diag_res["status"] == "cancelled"
     assert "Bị hủy do job đọc trước đó" in (diag_res.get("error_message") or "")
+
+
+def test_legacy_runs_without_output_count_as_read():
+    """Runs created before payload['output'] existed must not be re-read (costs credits)."""
+    from sqlmodel import Session
+
+    from app import db
+    from app.analysis.stages import get_read_frame_ids
+    from app.models.analysis import AnalysisRun
+    from app.models.project import Chapter, Project
+
+    with Session(db.engine) as s:
+        p = Project(name="legacy")
+        s.add(p)
+        s.flush()
+        ch = Chapter(project_id=p.id, title="c")
+        s.add(ch)
+        s.flush()
+        s.add(
+            AnalysisRun(
+                chapter_id=ch.id,
+                stage="read",
+                unit_index=0,
+                status="succeeded",
+                payload={"targets": ["FA", "FB"], "summary": "x"},
+            )
+        )
+        s.commit()
+        assert get_read_frame_ids(s, ch.id) == {"FA", "FB"}
