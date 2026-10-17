@@ -275,6 +275,14 @@ class ReadBatchOut(BaseModel):
     running_summary: str = ""
 
 
+class SpeakerSuggestion(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    speaker_key: Optional[str] = None
+    speaker_label: Optional[str] = None
+    reason: str = Field(..., max_length=200)
+
+
 class DialogueEdit(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -282,6 +290,7 @@ class DialogueEdit(BaseModel):
     text: str = Field(min_length=1)
     edit_note: Optional[str] = None
     uncertain: bool = False
+    speaker_suggestion: Optional[SpeakerSuggestion] = None
 
 
 class GlossaryCandidate(BaseModel):

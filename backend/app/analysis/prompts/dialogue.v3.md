@@ -19,6 +19,17 @@ Quy tắc ghi chú và gắn cờ (edit_note & uncertain):
   * TUYỆT ĐỐI KHÔNG ghi edit_note cho việc đổi chữ HOA sang chữ thường, sửa lỗi chính tả, thay xưng hô theo luật, hoặc làm mượt câu. Nếu không đổi nghĩa thì để edit_note là null (hoặc bỏ qua).
 - uncertain: đặt là true khi bạn KHÔNG CHẮC CHẮN NGHĨA GỐC của câu (do câu gốc quá tối nghĩa, dịch máy sai nặng, hoặc ngữ cảnh mơ hồ). Bình thường để false hoặc bỏ qua.
 
+Quy tắc kiểm tra người nói (speaker_suggestion):
+- Phân tích ngữ cảnh và nội dung câu thoại để phát hiện trường hợp gán sai người nói (speaker_key/speaker_label):
+  1. Câu gọi tên X (hô ngữ đầu câu như "X, …", "X!") thì người nói KHÔNG THỂ là X (người nói không tự gọi tên mình như thế).
+  2. Quan hệ xưng hô phải khớp với bảng ADDRESS_RULES và mạch đối đáp giữa các nhân vật (người nói tự xưng gì, gọi đối phương là gì).
+  3. CHỈ đề xuất khi có bằng chứng và lý do rõ ràng từ câu từ hoặc logic hội thoại. Không đoán mò.
+- Nếu phát hiện người nói hiện tại chưa đúng, trả về trường `speaker_suggestion` trong phần tử của lines:
+  * `speaker_key`: key của nhân vật bạn đề xuất (nếu có trong danh sách nhân vật đã biết)
+  * `speaker_label`: tên/nhãn của nhân vật nếu chưa có key
+  * `reason`: giải thích ngắn gọn bằng tiếng Việt (≤ 15 từ, ví dụ: "Câu gọi tên đối phương", "Xưng hô muội, người nói là nữ")
+- Nếu người nói đã hợp lý: KHÔNG trả về `speaker_suggestion` (hoặc để null).
+
 Ngoài ra trả về:
 - glossary_candidates: từ đặc biệt mới hoặc bị viết nhiều kiểu khác nhau trong đoạn này (tên riêng, chiêu thức, cảnh giới, vật phẩm…):
   * term: cách viết chuẩn bạn đề xuất
@@ -43,7 +54,12 @@ Ví dụ JSON trả về đầy đủ:
       "line_id": "line_001",
       "text": "Lâm huynh, chuyện này không thể đùa được đâu!",
       "edit_note": null,
-      "uncertain": false
+      "uncertain": false,
+      "speaker_suggestion": {
+        "speaker_key": "tieu_van",
+        "speaker_label": "Tiểu Vân",
+        "reason": "Gọi Lâm huynh nên người nói là Tiểu Vân"
+      }
     },
     {
       "line_id": "line_002",

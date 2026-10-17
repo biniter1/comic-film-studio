@@ -6,6 +6,12 @@ export type Gender = "male" | "female" | "unknown";
 export type AgeGroup = "child" | "teen" | "young_adult" | "middle_aged" | "elderly" | "unknown";
 export type ReviewStatus = "suggested" | "approved" | "rejected";
 
+export interface SpeakerSuggestion {
+  speaker_key?: string | null;
+  speaker_label?: string | null;
+  reason: string;
+}
+
 export interface DialogueLine {
   id: string;
   chapter_id: string;
@@ -27,6 +33,7 @@ export interface DialogueLine {
   edit_note: string | null;
   needs_review: boolean;
   reviewed: boolean;
+  speaker_suggestion?: SpeakerSuggestion | null;
 }
 
 export type HeightClass = "child" | "short" | "average" | "tall" | "giant";
@@ -130,6 +137,7 @@ export interface DialogueFrame {
   frame_type: FrameType | null;
   frame_type_source: "ai" | "user" | null;
   description: string;
+  characters?: string[];
   image_url: string;
 }
 
@@ -184,7 +192,7 @@ export interface AddressRule {
 export type Stage = "read" | "dialogue";
 
 export type LinePatch = Partial<
-  Pick<DialogueLine, "text" | "speaker_key" | "speaker_label" | "kind" | "reviewed">
+  Pick<DialogueLine, "text" | "speaker_key" | "speaker_label" | "kind" | "reviewed" | "speaker_suggestion">
 > & { anchor_frame_id?: string | null };
 
 const json = (body: unknown): RequestInit => ({ body: JSON.stringify(body) });
@@ -219,6 +227,8 @@ export const dialogueApi = {
 
   patchLine: (lid: string, patch: LinePatch) =>
     request<DialogueLine>(`/dialogue/${lid}`, { method: "PATCH", ...json(patch) }),
+  applySpeakerSuggestion: (lid: string) =>
+    request<DialogueLine>(`/dialogue/${lid}/apply-speaker-suggestion`, { method: "POST" }),
   revertLine: (lid: string) => request<DialogueLine>(`/dialogue/${lid}/revert`, { method: "POST" }),
   reviewAll: (cid: string) =>
     request<{ reviewed: number }>(`/chapters/${cid}/dialogue/review-all`, { method: "POST" }),

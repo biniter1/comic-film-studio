@@ -105,6 +105,9 @@ class DialogueLine(SQLModel, table=True):
     edit_note: Optional[str] = None
     needs_review: bool = False
     reviewed: bool = False
+    speaker_suggestion: Optional[dict[str, Any]] = Field(
+        default=None, sa_column=Column(JSON, nullable=True)
+    )
     shot_code: Optional[str] = None
     at_s: Optional[float] = None
     dur_s: Optional[float] = None

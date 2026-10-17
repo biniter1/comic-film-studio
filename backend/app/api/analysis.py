@@ -254,6 +254,7 @@ class LinePatch(BaseModel):
     kind: Optional[TextKind] = None
     anchor_frame_id: Optional[str] = None
     reviewed: Optional[bool] = None
+    speaker_suggestion: Optional[dict[str, Any]] = None
 
 
 @router.get("/chapters/{cid}/dialogue")
@@ -264,6 +265,11 @@ def get_dialogue(cid: str) -> dict[str, Any]:
 @router.patch("/dialogue/{lid}")
 def patch_line(lid: str, body: LinePatch) -> dict[str, Any]:
     return svc.update_line(lid, body.model_dump(exclude_unset=True))
+
+
+@router.post("/dialogue/{lid}/apply-speaker-suggestion")
+def apply_speaker_suggestion(lid: str) -> dict[str, Any]:
+    return svc.apply_speaker_suggestion(lid)
 
 
 @router.post("/dialogue/{lid}/revert")

@@ -126,6 +126,7 @@ def get_dialogue(cid: str) -> dict[str, Any]:
                     "frame_type": f.frame_type,
                     "frame_type_source": f.frame_type_source,
                     "description": (f.reading or {}).get("description", ""),
+                    "characters": (f.reading or {}).get("characters", []),
                     "image_url": f"/api/assets/{f.asset_id}/file",
                 }
                 for f in frames
@@ -211,10 +212,65 @@ def update_line(lid: str, patch: dict[str, Any]) -> dict[str, Any]:
                     )
                 d.anchor_frame_id = fid
                 d.anchor_locked = True
+        if "speaker_suggestion" in patch:
+            d.speaker_suggestion = patch["speaker_suggestion"]
         if "reviewed" in patch and patch["reviewed"] is not None:
             d.reviewed = bool(patch["reviewed"])
         elif any(k in patch for k in ("text", "speaker_key", "speaker_label", "kind")):
             d.reviewed = True  # the user looked at it and changed it
+        s.add(d)
+        _touch_draft(s, ch)
+        s.commit()
+        s.refresh(d)
+        s.refresh(ch)
+        _emit(ch)
+        return line_dict(d)
+
+
+def apply_speaker_suggestion(lid: str) -> dict[str, Any]:
+    with _session() as s:
+        d = s.get(DialogueLine, lid)
+        if not d:
+            raise AppError("LINE_NOT_FOUND", "Không tìm thấy câu thoại", status_code=404)
+        ch = _editable(s, d.chapter_id)
+        sugg = d.speaker_suggestion
+        if not sugg:
+            raise AppError(
+                "NO_SUGGESTION", "Không có đề xuất người nói cho câu này", status_code=400
+            )
+
+        key = sugg.get("speaker_key")
+        label = sugg.get("speaker_label")
+        if key:
+            c = s.exec(
+                select(Character).where(Character.project_id == ch.project_id, Character.key == key)
+            ).first()
+            if c:
+                d.speaker_key = key
+                d.speaker_label = c.name
+                d.speaker_gender = c.gender
+                d.speaker_age = c.age_group
+            else:
+                d.speaker_key = key
+                if label:
+                    d.speaker_label = label
+        elif label:
+            d.speaker_label = label
+            c = s.exec(
+                select(Character).where(
+                    Character.project_id == ch.project_id, Character.name == label
+                )
+            ).first()
+            if c:
+                d.speaker_key = c.key
+                d.speaker_gender = c.gender
+                d.speaker_age = c.age_group
+            else:
+                d.speaker_key = None
+
+        d.speaker_confidence = 1.0
+        d.speaker_suggestion = None
+        d.reviewed = True
         s.add(d)
         _touch_draft(s, ch)
         s.commit()
